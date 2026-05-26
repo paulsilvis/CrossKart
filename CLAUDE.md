@@ -1,454 +1,132 @@
-# Cross-Kart Telemetry Project — CLAUDE.md
+# CLAUDE.md — Cross-Kart Telemetry Project
 
-## Overview
+## What This Project Is
 
-This project is a hobbyist-but-serious telemetry and visualization system for a cross-kart (off-road racing kart) developed by Paul and his brother Gary.
+A hobbyist-but-serious telemetry and replay system for an off-road racing kart,
+built by Paul and Gary. It logs sensor data during runs and replays it with
+visually compelling animation. The experience goal: "That is really cool."
 
-The goal is not professional motorsport telemetry, but a robust, visually impressive system capable of:
-
-* Logging telemetry during kart runs
-* Recording GPS position, speed, acceleration, and rotation
-* Allowing manual event markers
-* Replaying runs with a highly visual animated playback system
-* Supporting "beer-night replay analysis" and experimentation
-* Providing a foundation for future expansion
-
-The project emphasizes:
-
-* Practical engineering
-* Reliability
-* Clear architecture
-* Visually compelling playback
-* Simple hardware
-* Offline analysis and experimentation
+This is a fun engineering project. It should stay that way.
 
 ---
 
-# Core Goals
+## Current Status
 
-## Telemetry Capture
+**Phase:** Architecture and design. Hardware not yet finalized.
+Active work is on:
+- Synthetic data generation (`make_synth_session.py`)
+- Browser-based replay viewer
+- Hardware selection
 
-The system should record:
-
-* GPS position
-* GPS speed
-* IMU acceleration
-* IMU angular rotation
-* Timestamps
-* Optional manual event markers
-* Optional audio recording (engine sound)
-
-Target environment:
-
-* Cross-kart
-* Up to ~50 MPH
-* Typical speeds 20–30 MPH
-* Rough grass/dirt environment
-* Significant vibration
+Known issues in the viewer:
+- NaN rendering artifacts
+- Trail endpoint display bugs
+- Playback synchronization irregularities
 
 ---
 
-# Design Philosophy
+## Project Structure
 
-## Priorities
+> Update this section as the codebase grows.
 
-1. Reliability
-2. Simplicity
-3. Clear architecture
-4. Cool playback visuals
-5. Expandability
-6. Robust logging
-7. Fun experimentation
-
-## Non-goals
-
-* Professional motorsports telemetry
-* RTK-grade positioning (for V1)
-* Ultra-tight real-time constraints
-* Overengineered abstraction
-* Cloud dependence
+```
+/                          # repo root
+├── CLAUDE.md              # this file
+├── firmware/              # ESP32 firmware (C/C++ / Arduino / IDF)
+├── logger/                # host-side session tools
+│   └── make_synth_session.py
+├── viewer/                # browser-based replay UI
+└── docs/                  # design notes, diagrams
+```
 
 ---
 
-# Planned Hardware
+## How To Run Things
 
-## Microcontroller
+> Fill in as components become runnable.
 
-ESP32 family.
+```bash
+# Generate a synthetic session
+python make_synth_session.py
 
-Candidates considered:
-
-* ESP32-WROOM
-* ESP32 DevKitC
-* ESP32 with external antenna
-* ESP32-CAM variants
-
-Reasons:
-
-* Cheap
-* Excellent ecosystem
-* Wi-Fi support
-* Adequate performance
-* Good storage support
-* Familiarity
+# Launch the viewer (TBD)
+```
 
 ---
 
-## GPS / GNSS
+## Hardware (Decided or Strongly Leaning)
 
-Candidates discussed:
+| Component     | Choice              | Notes                              |
+|---------------|---------------------|------------------------------------|
+| MCU           | ESP32 (WROOM or S3) | Wi-Fi, adequate perf, cheap        |
+| GNSS          | u-blox M10N         | Modern, good update rate, no RTK   |
+| IMU           | TBD (BNO085 likely) | Want fusion output eventually      |
+| Storage       | MicroSD via SPI     | Session files, easy extraction     |
+| Power         | 12V → buck → 3.3V   | From kart electrical system        |
 
-* u-blox NEO-6M
-* u-blox M9N
-* u-blox M10N
-
-Current leaning:
-
-* M10N
-
-Reasoning:
-
-* Modern
-* Better sensitivity
-* Better update rates
-* Good price/performance
-
-RTK is intentionally deferred for V1 because:
-
-* Complexity
-* Infrastructure requirements
-* Diminishing returns for intended use
+RTK GPS is intentionally deferred. It adds complexity with diminishing returns
+for this use case.
 
 ---
 
-## IMU Options
+## Data Format
 
-Discussed:
+Sessions are self-contained files. Current preference: start with CSV or JSON
+(human-readable), move to binary only if performance demands it.
 
-* MPU6050 / GY-521
-* ADXL345
-* BNO055
-* BNO085/BNO086
-
-Current direction:
-
-* Likely a fused-orientation IMU eventually
-* Simpler IMU acceptable for early prototypes
-
-Data desired:
-
-* 3-axis acceleration
-* 3-axis gyro
-* Orientation estimation later
+Each session contains:
+- Timestamped telemetry (GPS pos, speed, IMU accel, gyro)
+- Session metadata
+- Optional: manual event markers, audio
 
 ---
 
-## Storage
+## Engineering Principles
 
-Primary logging target:
+**Follow these. Do not drift from them.**
 
-* MicroSD card
+1. **Reliability first.** The logger must survive vibration, power glitches, and
+   noisy 12V systems. Corrupt logs are the worst outcome.
 
-Possible interfaces:
+2. **Simplicity.** One clear way to do each thing. No premature abstraction.
+   No framework bloat.
 
-* SPI SD modules
-* SDIO-capable modules later
+3. **Readable code.** Explicit over clever. If it needs a comment to understand,
+   write the comment. If it can be restructured to be obvious, restructure it.
 
-Requirements:
+4. **Test everything incrementally.** Each layer gets tests or mockups before
+   the next layer is built. Synthetic data exists precisely for this.
 
-* Robust write behavior
-* Session-oriented files
-* Easy extraction and replay
+5. **Layer by layer.** Do not build layer N+1 until layer N works and is tested.
 
----
-
-## Power
-
-Vehicle 12V system.
-
-Expected:
-
-* Buck converter to 5V/3.3V
-* Noise filtering
-* Vibration-resistant wiring
+6. **Not a hydra.** When a new idea would add a head to the snake, write it down
+   for later. Don't build it now.
 
 ---
 
-## Enclosure
+## Development Approach
 
-Goals:
-
-* Rugged
-* IP-rated
-* Shock resistant
-* Serviceable
-
-Ideas discussed:
-
-* Clear lid
-* Internal mounting grid
-* Foam isolation layers
-* Roll-cage-mounted GNSS antenna
+- Iterative and experimental — trying ideas is encouraged
+- Synthetic data (`make_synth_session.py`) is the primary dev/test tool
+   until real hardware exists
+- Visualization quality matters — this is half the point of the project
+- Each system (firmware, logger, viewer) should be independently testable
 
 ---
 
-# Data Logging
+## Out of Scope for V1
 
-## Session-Oriented Logging
+- RTK GPS
+- Cloud connectivity
+- Real-time telemetry dashboard
+- Multi-kart support
+- AI event detection
 
-Each run should become a self-contained session.
-
-Likely contents:
-
-* Timestamped telemetry stream
-* Metadata
-* Optional markers
-* Optional audio
-
-Potential formats:
-
-* CSV
-* JSON
-* Binary later if needed
-
-Initial preference:
-
-* Human-readable/simple formats
+These are written down. They will not be forgotten. They are not happening yet.
 
 ---
 
-# Visualization System
+## People
 
-## Major Goal
-
-The visualization/playback system is considered one of the most important parts of the project.
-
-Desired features:
-
-* Animated replay
-* GPS track display
-* Timeline scrubber
-* Speed display
-* G-force visualization
-* Orientation display
-* Optional lap overlays
-* Optional trail overlays
-* Marker playback
-* "Ridiculously cool" presentation
-
-The user experience matters more than racing-grade analytics.
-
----
-
-## Planned Visual Concepts
-
-### 3D Wireframe Kart
-
-Possible animated representation:
-
-* Rotating wireframe kart
-* Tilt based on IMU data
-* Suspension-like visual motion
-* Velocity vectors
-* Acceleration vectors
-
-### Track Replay
-
-* Draw GPS path
-* Show moving kart marker
-* Replay synchronized telemetry
-* Overlay multiple laps eventually
-
-### Audio Integration
-
-Gary strongly suggested synchronized audio playback:
-
-* Engine sound recorded with run
-* Synchronized with replay
-* Engine pitch provides intuitive feedback
-
-This is considered a high-value future enhancement.
-
----
-
-# Synthetic Data System
-
-A synthetic data generator exists to:
-
-* Test visualization
-* Develop playback UI
-* Simulate tracks
-* Debug rendering
-
-Example:
-
-* `make_synth_session.py`
-
-Capabilities discussed:
-
-* Twisty tracks
-* Aggression parameter
-* Seeded reproducibility
-* Replay debugging
-
-Issues encountered:
-
-* NaN rendering artifacts
-* Trail endpoint issues
-* Playback synchronization bugs
-
----
-
-# Viewer / Playback Architecture
-
-The current direction is:
-
-* Browser-based viewer
-* Simple deployment
-* Local/offline use
-* Friendly for non-CLI users
-
-Potential technologies:
-
-* Python backend
-* Streamlit prototype
-* WebGL later
-* Three.js possibilities
-* Canvas/SVG rendering
-
-The playback viewer is expected to evolve substantially.
-
----
-
-# Networking / Data Transfer
-
-Preferred workflow:
-
-* Kart logs locally
-* Wi-Fi offload when returning home/shop
-* No cloud requirement
-
-Possible transfer methods:
-
-* Wi-Fi auto-upload
-* Browser download
-* SD card extraction fallback
-
----
-
-# Engineering Style
-
-The project strongly values:
-
-* Clarity
-* Simplicity
-* Practicality
-* Directness
-* Minimal unnecessary abstraction
-
-Code should:
-
-* Be readable
-* Be debuggable
-* Avoid framework bloat
-* Favor explicit behavior
-
----
-
-# Development Philosophy
-
-This is:
-
-* Experimental
-* Iterative
-* Engineering-driven
-* Visualization-heavy
-
-The project intentionally encourages:
-
-* Trying ideas
-* Simulating data
-* Incremental improvement
-* Fun experimentation
-
-The system should remain hackable and understandable.
-
----
-
-# Future Possibilities
-
-Potential future features:
-
-* Multiple synchronized cameras
-* Audio analysis
-* Real-time telemetry display
-* Live Wi-Fi dashboard
-* Lap comparison
-* Kalman filtering
-* Terrain visualization
-* AI-assisted event detection
-* Multiple kart support
-* RTK GPS later
-* OLED or embedded dashboard
-* Motion-triggered recording
-* Telemetry export formats
-
----
-
-# Important Constraints
-
-## Reliability First
-
-The logger must:
-
-* Survive vibration
-* Avoid corrupt logs
-* Recover cleanly from power loss
-* Tolerate noisy electrical systems
-
----
-
-## Simplicity Matters
-
-Avoid:
-
-* Overengineering
-* Premature abstraction
-* Unnecessary dependencies
-* Excessive architectural complexity
-
----
-
-# Current Status
-
-Current phase:
-
-* Architecture exploration
-* Hardware selection
-* Visualization prototyping
-* Synthetic data generation
-* Playback experimentation
-
-The replay/viewer system is currently the most visually developed component.
-
----
-
-# Intended Tone of the Project
-
-This is fundamentally:
-
-* A fun engineering project
-* A visualization playground
-* A telemetry experiment
-* A shared hobby between brothers
-
-The spirit of the project matters as much as the technical results.
-
-The ideal result is something that:
-
-* Works reliably
-* Looks fantastic
-* Is enjoyable to use
-* Makes people say:
-  "That is really cool." /Bob
-
+- **Paul** — builder, lead developer
+- **Gary** — co-builder, hardware contributor, audio integration advocate
