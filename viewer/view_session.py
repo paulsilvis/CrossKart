@@ -264,9 +264,14 @@ def render_track_map(
 
     ax.plot(hi_x, hi_y, lw=1.2, color="#4C9BE8", zorder=2)
 
-    # Tail
+    # Tail — round caps so both endpoints look intentional, not clipped.
+    # A small dot at the back end marks where the time window begins.
     t0 = max(0, idx - tail_n)
-    ax.plot(x_all[t0:idx+1], y_all[t0:idx+1], lw=3.0, color="#E87C4C", zorder=3)
+    ax.plot(x_all[t0:idx+1], y_all[t0:idx+1], lw=3.0, color="#E87C4C",
+            zorder=3, solid_capstyle="round")
+    if t0 < idx:
+        ax.scatter([x_all[t0]], [y_all[t0]], s=20, color="#E87C4C",
+                   zorder=3, marker="o", linewidths=0)
 
     # Current position
     ax.scatter([x_all[idx]], [y_all[idx]], s=80, color="#FFD700",
@@ -479,6 +484,11 @@ def main() -> None:
         advance_playhead(sess.duration, float(speed))
 
     # ── Timeline scrubber ─────────────────────────────────────────────────────
+    # Keep the slider thumb in sync with the advancing playhead during playback.
+    # Without this, Streamlit ignores the `value` arg on reruns and the thumb
+    # stays frozen; pausing then snaps the playhead back to the stale position.
+    if st.session_state.playing:
+        st.session_state["timeline_slider"] = st.session_state.playhead
     t_now = st.slider(
         "Timeline",
         0.0, sess.duration,
