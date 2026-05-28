@@ -542,7 +542,7 @@ def main() -> None:
 
     with left:
         ts_fig = render_timeseries(sess, idx, float(window_s))
-        st.pyplot(ts_fig, use_container_width=True)
+        st.pyplot(ts_fig, width='stretch')
         plt.close(ts_fig)
 
         map_fig = render_track_map(
@@ -551,7 +551,7 @@ def main() -> None:
             mode=map_mode,
             window_idx=(win_i0, win_i1) if map_mode == "local" else None,
         )
-        st.pyplot(map_fig, use_container_width=True)
+        st.pyplot(map_fig, width='stretch')
         plt.close(map_fig)
 
     with right:
@@ -560,7 +560,7 @@ def main() -> None:
             float(row["qy"]), float(row["qz"]),
             float(row["ax"]), float(row["ay"]), float(row["az"]),
         )
-        st.pyplot(att_fig, use_container_width=True)
+        st.pyplot(att_fig, width='stretch')
         plt.close(att_fig)
 
         st.subheader("Attitude")
