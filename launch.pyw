@@ -33,11 +33,15 @@ def die(msg):
 
 
 def run(cmd, **kwargs):
+    kwargs.setdefault("creationflags", NO_WINDOW)
+    kwargs.setdefault("stderr", subprocess.PIPE)
     result = subprocess.run(cmd, **kwargs)
     if result.returncode != 0:
+        detail = result.stderr.decode(errors="replace").strip() if result.stderr else ""
         die(
             f"Setup step failed (exit {result.returncode}):\n\n"
             + " ".join(str(c) for c in cmd)
+            + (f"\n\n{detail}" if detail else "")
             + "\n\nCheck that Python is installed and try again."
         )
 
