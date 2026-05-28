@@ -53,6 +53,16 @@ def run(cmd, **kwargs):
         )
 
 
+def show_paths():
+    root = tk.Tk()
+    root.withdraw()
+    messagebox.showinfo(
+        "Cross-Kart paths",
+        f"HERE:  {HERE}\nVENV:  {VENV}\nREQS:  {REQUIREMENTS}\nPYTHON: {PYTHON}",
+    )
+    root.destroy()
+
+
 def first_run_notice():
     root = tk.Tk()
     root.withdraw()
@@ -67,6 +77,7 @@ def first_run_notice():
 # ── First-run setup ───────────────────────────────────────────────────────────
 
 if not os.path.exists(STREAMLIT):
+    show_paths()
     first_run_notice()
     run([PYTHON, "-m", "venv", VENV])
     run([PIP, "install", "--quiet", "-r", REQUIREMENTS])
