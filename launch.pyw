@@ -24,6 +24,12 @@ VIEWER = os.path.join(HERE, "viewer", "view_session.py")
 
 NO_WINDOW = 0x08000000  # Windows: suppress console window for subprocesses
 
+# sys.executable under pythonw.exe is pythonw.exe, which can't run venv/pip.
+# Swap in python.exe from the same directory for setup work.
+PYTHON = sys.executable.replace("pythonw.exe", "python.exe")
+if not os.path.exists(PYTHON):
+    PYTHON = sys.executable
+
 
 def die(msg):
     root = tk.Tk()
@@ -34,6 +40,7 @@ def die(msg):
 
 def run(cmd, **kwargs):
     kwargs.setdefault("creationflags", NO_WINDOW)
+    kwargs.setdefault("stdout", subprocess.PIPE)
     kwargs.setdefault("stderr", subprocess.PIPE)
     result = subprocess.run(cmd, **kwargs)
     if result.returncode != 0:
@@ -61,7 +68,7 @@ def first_run_notice():
 
 if not os.path.exists(STREAMLIT):
     first_run_notice()
-    run([sys.executable, "-m", "venv", VENV])
+    run([PYTHON, "-m", "venv", VENV])
     run([PIP, "install", "--quiet", "-r", REQUIREMENTS])
 
 # ── Launch Streamlit ──────────────────────────────────────────────────────────
