@@ -20,8 +20,6 @@ Active work is on:
 
 Known issues in the viewer:
 - NaN rendering artifacts
-- Trail endpoint display bugs
-- Playback synchronization irregularities
 
 ---
 
@@ -43,13 +41,38 @@ Known issues in the viewer:
 
 ## How To Run Things
 
-> Fill in as components become runnable.
+### On Windows (Gary's path)
+
+**One-time setup:**
+1. Install Python 3.10+ from https://www.python.org/downloads/
+   — check **"Add Python to PATH"** during install.
+2. Install GitHub Desktop from https://desktop.github.com/
+3. In GitHub Desktop: **File → Clone Repository** → paste the repo URL.
+
+**Every time:**
+- Double-click **`launch.pyw`** in the project folder.
+- First launch only: a dialog says "setting up" — wait ~1 minute.
+- The viewer opens in your browser. Drag in a session CSV to begin.
+
+**Getting updates:**
+- Open GitHub Desktop → click **Fetch origin** → **Pull**.
+- Then double-click `launch.pyw` as usual.
+
+---
+
+### On Linux / Mac (Paul's path)
 
 ```bash
-# Generate a synthetic session
-python make_synth_session.py
+# One-time: create virtual environment
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 
-# Launch the viewer (TBD)
+# Generate a synthetic session
+python logger/make_synth_session.py
+
+# Launch the viewer
+streamlit run viewer/view_session.py
 ```
 
 ---
