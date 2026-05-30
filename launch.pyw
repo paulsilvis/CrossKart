@@ -2,8 +2,9 @@
 Cross-Kart Telemetry Viewer — Windows launcher
 
 Double-click this file to start the viewer.
-- First run: creates a virtual environment and installs dependencies (~1 min).
+- First run: creates a virtual environment and installs dependencies (~1-2 min).
 - After that: opens the viewer in your browser immediately.
+- A tray icon appears in the taskbar — right-click it to reopen or stop the viewer.
 
 Requires Python 3.10+ installed from https://www.python.org/downloads/
 (check "Add Python to PATH" during install).
@@ -14,6 +15,7 @@ import subprocess
 import sys
 import time
 import tkinter as tk
+import webbrowser
 from tkinter import messagebox
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -65,6 +67,23 @@ def first_run_notice():
     root.destroy()
 
 
+def make_icon():
+    """Checkered flag icon for the system tray."""
+    from PIL import Image, ImageDraw
+    size = 64
+    img = Image.new("RGB", (size, size), (15, 15, 26))
+    draw = ImageDraw.Draw(img)
+    sq = size // 4
+    for row in range(4):
+        for col in range(4):
+            color = (240, 240, 240) if (row + col) % 2 == 0 else (30, 30, 30)
+            draw.rectangle(
+                [col * sq, row * sq, (col + 1) * sq - 1, (row + 1) * sq - 1],
+                fill=color,
+            )
+    return img
+
+
 # ── First-run setup ───────────────────────────────────────────────────────────
 
 if not os.path.exists(STREAMLIT):
@@ -74,13 +93,38 @@ if not os.path.exists(STREAMLIT):
 
 # ── Launch Streamlit ──────────────────────────────────────────────────────────
 
-subprocess.Popen(
+proc = subprocess.Popen(
     [STREAMLIT, "run", VIEWER, "--server.headless", "false"],
     creationflags=NO_WINDOW,
     cwd=HERE,
 )
 
-# Give Streamlit a moment to start, then open the browser.
 time.sleep(4)
-import webbrowser
 webbrowser.open("http://localhost:8501")
+
+# ── System tray icon ──────────────────────────────────────────────────────────
+# icon.run() blocks here, keeping the launcher alive while Streamlit runs.
+# Stopping from the tray terminates Streamlit and exits cleanly.
+
+import pystray
+
+
+def open_viewer(icon, item):
+    webbrowser.open("http://localhost:8501")
+
+
+def stop_viewer(icon, item):
+    proc.terminate()
+    icon.stop()
+
+
+tray = pystray.Icon(
+    "CrossKart",
+    make_icon(),
+    "Cross-Kart Viewer  (right-click to stop)",
+    menu=pystray.Menu(
+        pystray.MenuItem("Open Viewer", open_viewer, default=True),
+        pystray.MenuItem("Stop", stop_viewer),
+    ),
+)
+tray.run()
