@@ -324,6 +324,7 @@ let frameIdx = 0;      // current frame index
 let playing = false;
 let lastRaf = null;
 let lastWallTime = null;
+let frameAccum = 0;    // fractional frame accumulator for sub-1x playback speeds
 const TRAIL_LEN = 150; // frames of speed-trail history
 
 // Map geometry (computed once after session load)
@@ -617,6 +618,16 @@ function _qmat(qw,qx,qy,qz){ return [
   [  2*(qx*qz-qw*qy),   2*(qy*qz+qw*qx), 1-2*(qx*qx+qy*qy)],
 ]; }
 
+// Chase-cam quaternion: strip yaw so the kart always faces away from camera.
+// Only roll and pitch remain, making tilt immediately readable.
+function _rpQuat(qw,qx,qy,qz) {
+  const roll  = Math.atan2(2*(qw*qx+qy*qz), 1-2*(qx*qx+qy*qy));
+  const pitch = Math.asin(Math.max(-1,Math.min(1, 2*(qw*qy-qz*qx))));
+  const cr=Math.cos(roll/2),  sr=Math.sin(roll/2);
+  const cp=Math.cos(pitch/2), sp=Math.sin(pitch/2);
+  return [cr*cp, sr*cp, cr*sp, -sr*sp];  // yaw=0
+}
+
 function _rv(M,v){ return[
   M[0][0]*v[0]+M[0][1]*v[1]+M[0][2]*v[2],
   M[1][0]*v[0]+M[1][1]*v[1]+M[1][2]*v[2],
@@ -637,10 +648,18 @@ function _buildKart() {
   // Seat back
   push([[0.22,-0.26,CC_H],[0.22,0.26,CC_H],[0.22,0.26,CC_H+0.40],[0.22,-0.26,CC_H+0.40]],
        '#1e1e1e','#555555',0.8,0.82);
-  // Roll bar (front face — most visible from behind)
+  // Rear chassis face — vertical wall at the back, most visible from behind
+  push([[-0.65,-0.52,0],[-0.65,0.52,0],[-0.65,0.52,CC_H],[-0.65,-0.52,CC_H]],
+       '#1a2a1a','#445544',1.0,0.90);
+  // Rear bumper bar — bright horizontal bar, unmistakably the back end
+  push([[-0.68,-0.54,CC_H*0.5],[-0.68,0.54,CC_H*0.5],
+        [-0.62,0.54,CC_H*0.5],[-0.62,-0.54,CC_H*0.5]],
+       '#cc4400','#ff8844',1.5,0.98);
+
+  // Roll bar (front face — visible from behind above the seat)
   push([[-0.10,-0.38,CC_H],[-0.10,0.38,CC_H],
         [-0.10,0.38,CC_H+0.72],[-0.10,-0.38,CC_H+0.72]],
-       '#444444','#cccccc',2.0,0.93);
+       '#444444','#dddddd',2.2,0.93);
 
   // Wheels — each as outer disc + inner disc + NW tread quads
   const wcs = [[0.60,0.64,CC_WR],[0.60,-0.64,CC_WR],
@@ -680,7 +699,9 @@ function drawChaseCam(fi) {
   const ax=S.ax[fi],ay=S.ay[fi],az=S.az[fi];
   const gm = Math.sqrt(ax*ax+ay*ay+az*az);
   const gcol = gColor(gm);
-  const R = _qmat(qw,qx,qy,qz);
+  // Strip yaw so kart always faces camera; only roll+pitch are visible.
+  const [rw,rx,ry,rz] = _rpQuat(qw,qx,qy,qz);
+  const R = _qmat(rw,rx,ry,rz);
 
   // Ground grid (world-space Z=0 plane)
   ctx.strokeStyle='#0d1428'; ctx.lineWidth=0.5;
@@ -920,11 +941,13 @@ function animLoop(now) {
     const dt = (now - lastWallTime) / 1000;  // seconds
     lastWallTime = now;
     const playSpeed = parseFloat(document.getElementById('spd-sel').value);
-    const simDt = dt * playSpeed;
-    const dFrames = Math.round(simDt * S.meta.hz);
-    frameIdx = Math.min(S.meta.n_frames - 1, frameIdx + Math.max(1, dFrames));
+    frameAccum += dt * playSpeed * S.meta.hz;
+    const dFrames = Math.floor(frameAccum);
+    frameAccum -= dFrames;
+    if (dFrames > 0)
+      frameIdx = Math.min(S.meta.n_frames - 1, frameIdx + dFrames);
     if (frameIdx >= S.meta.n_frames - 1) {
-      playing = false;
+      playing = false; frameAccum = 0;
       document.getElementById('btn-play').textContent = '▶ PLAY';
       document.getElementById('btn-play').classList.remove('active');
     }
@@ -939,14 +962,14 @@ function animLoop(now) {
 function togglePlay() {
   if (!S) return;
   playing = !playing;
-  lastWallTime = null;
+  lastWallTime = null; frameAccum = 0;
   const btn = document.getElementById('btn-play');
   btn.textContent = playing ? '⏸ PAUSE' : '▶ PLAY';
   btn.classList.toggle('active', playing);
 }
 
 function resetPlay() {
-  playing = false; frameIdx = 0; lastWallTime = null;
+  playing = false; frameIdx = 0; lastWallTime = null; frameAccum = 0;
   stripHead = 0; stripSpd.fill(0);
   const btn = document.getElementById('btn-play');
   btn.textContent = '▶ PLAY'; btn.classList.remove('active');
