@@ -31,6 +31,7 @@ import sys
 import numpy as np
 import pandas as pd
 from flask import Flask, jsonify, render_template, request, abort
+from scipy.ndimage import gaussian_filter1d
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 G0   = 9.80665
@@ -54,6 +55,25 @@ _session_name: str        = ""
 
 
 # ── Session loading ────────────────────────────────────────────────────────────
+
+def _first_lap_end(x_m, y_m):
+    """
+    Return the frame index where the kart first returns near its start position,
+    after having travelled at least 200 m (avoids false positives at the start
+    and works regardless of total session length / lap count).
+    Used to draw only one clean lap as the static map background.
+    """
+    dx = np.diff(x_m); dy = np.diff(y_m)
+    cum_s = np.r_[0.0, np.cumsum(np.sqrt(dx*dx + dy*dy))]
+    min_travel = 200.0  # metres — safely past the departure zone
+    threshold  = 25.0   # metres — generous enough to survive GPS noise
+    for i in range(len(x_m)):
+        if cum_s[i] < min_travel:
+            continue
+        if math.sqrt((x_m[i] - x_m[0])**2 + (y_m[i] - y_m[0])**2) < threshold:
+            return i
+    return len(x_m)   # single-lap or out-and-back session: draw everything
+
 
 def _latlon_to_local(lat, lon, origin_lat, origin_lon):
     cos_lat = math.cos(math.radians(float(origin_lat)))
@@ -94,6 +114,12 @@ def load_csv(path: str) -> tuple[str, str]:
         df["lat"].to_numpy(), df["lon"].to_numpy(),
         origin_lat, origin_lon,
     )
+    # Smooth GPS noise for map display. sigma=5 samples (0.1 s at 50 Hz) spans
+    # one GPS update cycle, blending position steps without blurring corners
+    # (tight turns span 80+ samples at racing speeds).
+    x_m = gaussian_filter1d(x_m, sigma=5)
+    y_m = gaussian_filter1d(y_m, sigma=5)
+    lap1_end = _first_lap_end(x_m, y_m)
     spd_mph = df["spd"].to_numpy() * MPH
     g_mag   = np.sqrt(df["ax"]**2 + df["ay"]**2 + df["az"]**2).to_numpy() / G0
 
@@ -129,6 +155,7 @@ def load_csv(path: str) -> tuple[str, str]:
             "peak_g":     round(float(g_mag.max()), 3),
             "peak_yaw":   round(float(df["gz"].abs().max() * 57.296), 1),
             "n_events":   len(markers),
+            "lap1_end":   lap1_end,
         },
         "markers": markers,
         # Time-series channels (one value per frame)

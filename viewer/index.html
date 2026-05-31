@@ -446,12 +446,13 @@ function renderMapPath() {
 
   ctx.clearRect(0, 0, mapW, mapH);
 
-  // Dim full path
+  // Dim path — first lap only, so multi-lap GPS drift doesn't create a ribbon
+  const lap1End = S.meta.lap1_end || S.x_m.length;
   ctx.beginPath();
   const xs = S.x_m, ys = S.y_m;
   const [px0, py0] = toMap(xs[0], ys[0]);
   ctx.moveTo(px0, py0);
-  for (let i=1; i<xs.length; i++) {
+  for (let i=1; i<lap1End; i++) {
     const [px, py] = toMap(xs[i], ys[i]);
     ctx.lineTo(px, py);
   }
