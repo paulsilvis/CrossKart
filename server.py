@@ -209,9 +209,11 @@ def api_upload():
     if f is None or not f.filename.endswith(".csv"):
         abort(400, "Expected a .csv file.")
     import tempfile, os
-    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
-        f.save(tmp.name)
-        tmp_path = tmp.name
+    # Close before saving: Windows locks open files, preventing a second open.
+    tmp = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+    tmp_path = tmp.name
+    tmp.close()
+    f.save(tmp_path)
     try:
         _session_json, _session_name = load_csv(tmp_path)
     except ValueError as e:
