@@ -496,8 +496,9 @@ function spdColor(mph, maxMph) {
 }
 
 function gColor(g) {
-  if (g < 0.8) return '#00c97a';
-  if (g < 1.8) return '#f0b429';
+  // g is now motion-only (gravity removed): 0=rest, ~1=hard corner on grass
+  if (g < 0.35) return '#00c97a';
+  if (g < 0.75) return '#f0b429';
   return '#e84040';
 }
 
@@ -586,29 +587,83 @@ function drawSpeedometer(speed) {
 //  Kart geometry in body frame: +X=forward, +Y=left, +Z=up.
 //  Quaternion rotates body → world frame each frame.
 //  Painter's algorithm (sort faces by depth, draw back-to-front).
+//  Lighting: single directional light + ambient; shades each face.
+//  Camera lerp: position smoothly tracks each frame (no snap).
 // ════════════════════════════════════════════════════════
 
-// ── Camera (fixed world-space position) ──
+// ── Camera (ideal world-space position — actual pos is lerped) ──
 const CC_H=0.15, CC_WR=0.22, CC_WW=0.10, CC_NW=10;  // kart dims
-const CAM_POS    = [-1.52, 0.0,  1.52];   // 5 ft back, 5 ft up
+const CAM_IDEAL  = [-1.52, 0.0,  1.52];   // 5 ft back, 5 ft up
 const CAM_TARGET = [ 0.15, 0.0,  0.22];   // kart centre / roll-bar level
+const CAM_LERP   = 0.12;                   // per-frame lerp factor (0=frozen,1=snap)
 
-function _n3(v){ const l=Math.hypot(v[0],v[1],v[2]); return[v[0]/l,v[1]/l,v[2]/l]; }
+// Mutable camera position — lerps toward CAM_IDEAL each frame
+let _camPos = CAM_IDEAL.slice();
+
+// ── Lighting helpers (defined before use) ──
+function _n3v(v){ const l=Math.hypot(v[0],v[1],v[2]); return[v[0]/l,v[1]/l,v[2]/l]; }
+function _n3(v){ return _n3v(v); }
 function _x3(a,b){ return[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]]; }
 function _d3(a,b){ return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
 function _s3(a,b){ return[a[0]-b[0],a[1]-b[1],a[2]-b[2]]; }
+function _a3(a,b){ return[a[0]+b[0],a[1]+b[1],a[2]+b[2]]; }
 
-const _CF = _n3(_s3(CAM_TARGET, CAM_POS));       // camera forward
-const _CR = _n3(_x3(_CF, [0,0,1]));              // camera right
-const _CU = _x3(_CR, _CF);                       // camera up
+// Single key light from upper-left-front; world-space direction.
+const LIGHT_DIR  = _n3v([-0.55, -0.60, 0.85]);  // normalised
+const AMBIENT    = 0.28;   // 0–1 base brightness even on back faces
+const DIFFUSE    = 0.72;   // max added by facing the light
+
+// Shade a hex colour by a 0–1 factor (1=original, 0=black)
+function _shade(hex, f) {
+  f = Math.max(0, Math.min(1, f));
+  const r=parseInt(hex.slice(1,3),16), g=parseInt(hex.slice(3,5),16), b=parseInt(hex.slice(5,7),16);
+  return `rgb(${Math.round(r*f)},${Math.round(g*f)},${Math.round(b*f)})`;
+}
+
+// Shade an rgb(…) or hex colour string by factor f
+function _shadeCol(col, f) {
+  if (!col || col==='none') return col;
+  if (col.startsWith('#') && col.length===7) return _shade(col, f);
+  // rgb(r,g,b) — parse it
+  const m = col.match(/rgb\((\d+),(\d+),(\d+)\)/);
+  if (!m) return col;
+  f = Math.max(0, Math.min(1, f));
+  return `rgb(${Math.round(m[1]*f)},${Math.round(m[2]*f)},${Math.round(m[3]*f)})`;
+}
+
+// Compute face normal (world-space) from first three projected world verts.
+// Returns normalised outward normal, or zero-vec if degenerate.
+function _faceNormal(wv) {
+  if (wv.length < 3) return [0,0,1];
+  const ab = _s3(wv[1],wv[0]), ac = _s3(wv[2],wv[0]);
+  const n = _x3(ab,ac);
+  const l = Math.hypot(n[0],n[1],n[2]);
+  return l < 1e-9 ? [0,0,1] : [n[0]/l,n[1]/l,n[2]/l];
+}
+
+// Lighting factor for a face given its world-space normal.
+function _lightFactor(normal) {
+  // Lambert diffuse; abs so back-faces aren't black (thin geometry)
+  const ndotl = Math.abs(_d3(normal, LIGHT_DIR));
+  return AMBIENT + DIFFUSE * ndotl;
+}
+
+// Camera basis vectors — recomputed each frame from lerped _camPos
+function _camBasis() {
+  const cf = _n3(_s3(CAM_TARGET, _camPos));
+  const cr = _n3(_x3(cf, [0,0,1]));
+  const cu = _x3(cr, cf);
+  return {cf, cr, cu};
+}
 
 // Project a world-space point to canvas [sx, sy, depth]; null if behind cam.
-function _proj(pt, cx, cy, W) {
-  const v = _s3(pt, CAM_POS);
-  const rz = _d3(v, _CF);
+// cam = {cf, cr, cu} from _camBasis(); uses global _camPos.
+function _proj(pt, cx, cy, W, cam) {
+  const v = _s3(pt, _camPos);
+  const rz = _d3(v, cam.cf);
   if (rz < 0.05) return null;
   const f = W * 0.72;
-  return [cx + _d3(v,_CR)*f/rz, cy - _d3(v,_CU)*f/rz, rz];
+  return [cx + _d3(v,cam.cr)*f/rz, cy - _d3(v,cam.cu)*f/rz, rz];
 }
 
 // Quaternion → 3×3 rotation matrix (body → world).
@@ -692,35 +747,63 @@ function drawChaseCam(fi) {
   if (canvas.width !== pw || canvas.height !== ph) { canvas.width=pw; canvas.height=ph; }
   const W=canvas.width, H=canvas.height, cx=W/2, cy=H/2;
 
-  ctx.fillStyle = '#080b12';
+  // Sky-to-ground gradient background
+  const bgGrad = ctx.createLinearGradient(0,0,0,H);
+  bgGrad.addColorStop(0,'#060914');
+  bgGrad.addColorStop(0.55,'#0b1020');
+  bgGrad.addColorStop(1,'#111820');
+  ctx.fillStyle = bgGrad;
   ctx.fillRect(0, 0, W, H);
 
   const qw=S.qw[fi],qx=S.qx[fi],qy=S.qy[fi],qz=S.qz[fi];
   const ax=S.ax[fi],ay=S.ay[fi],az=S.az[fi];
-  const gm = Math.sqrt(ax*ax+ay*ay+az*az);
-  const gcol = gColor(gm);
+
+  // ── Camera lerp: smoothly approach the ideal position ──
+  for (let i=0;i<3;i++) _camPos[i] += (CAM_IDEAL[i]-_camPos[i])*CAM_LERP;
+  const cam = _camBasis();
+
   // Strip yaw so kart always faces camera; only roll+pitch are visible.
   const [rw,rx,ry,rz] = _rpQuat(qw,qx,qy,qz);
   const R = _qmat(rw,rx,ry,rz);
 
-  // Ground grid (world-space Z=0 plane)
-  ctx.strokeStyle='#0d1428'; ctx.lineWidth=0.5;
-  for (let i=-5;i<=5;i++) {
-    const a=_proj([i*0.4,-2,0],cx,cy,W), b=_proj([i*0.4,2,0],cx,cy,W);
-    const c=_proj([-2,i*0.4,0],cx,cy,W), d=_proj([2,i*0.4,0],cx,cy,W);
+  // ── Ground plane: solid asphalt fill + perspective grid ──
+  // Fill the lower portion of the canvas with a dark asphalt tone
+  const horizonY = cy * 0.92;  // approximate horizon screen-y
+  const groundGrad = ctx.createLinearGradient(0, horizonY, 0, H);
+  groundGrad.addColorStop(0, '#12181c');
+  groundGrad.addColorStop(1, '#1a2228');
+  ctx.fillStyle = groundGrad;
+  ctx.fillRect(0, horizonY, W, H - horizonY);
+
+  // Grid lines — wider spread (±4m) fading toward horizon
+  const GRID_R = 4, GRID_STEP = 0.4, GRID_N = Math.round(GRID_R/GRID_STEP);
+  for (let i=-GRID_N;i<=GRID_N;i++) {
+    const t = 1 - Math.abs(i)/GRID_N;  // fade factor: bright near centre
+    const alpha = 0.10 + 0.25 * t * t;
+    ctx.strokeStyle = `rgba(80,120,160,${alpha.toFixed(2)})`; ctx.lineWidth = 0.6;
+    const s = i * GRID_STEP;
+    const a=_proj([s,-GRID_R,0],cx,cy,W,cam), b=_proj([s,GRID_R,0],cx,cy,W,cam);
+    const c=_proj([-GRID_R,s,0],cx,cy,W,cam), d=_proj([GRID_R,s,0],cx,cy,W,cam);
     if(a&&b){ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke();}
     if(c&&d){ctx.beginPath();ctx.moveTo(c[0],c[1]);ctx.lineTo(d[0],d[1]);ctx.stroke();}
   }
 
-  // Rotate kart faces into world frame, project, sort back-to-front
+  // ── Rotate kart faces into world frame, project, light, sort back-to-front ──
   const bcol = spdColor(S.spd[fi], S.meta.top_mph);
   const projected = [];
   for (const face of KART_FACES) {
     const wv  = face.v.map(v=>_rv(R,v));
-    const sv  = wv.map(v=>_proj(v,cx,cy,W));
+    const sv  = wv.map(v=>_proj(v,cx,cy,W,cam));
     if (sv.some(p=>p===null)) continue;
     const depth = sv.reduce((s,p)=>s+p[2],0)/sv.length;
-    projected.push({...face, sv, depth, fill: face.fill==='body' ? bcol : face.fill});
+
+    // Lighting: compute face normal in world frame, shade fill colour
+    const rawFill = face.fill==='body' ? bcol : face.fill;
+    const lf = _lightFactor(_faceNormal(wv));
+    const shadedFill   = _shadeCol(rawFill, lf);
+    const shadedStroke = face.stroke ? _shadeCol(face.stroke, AMBIENT + (1-AMBIENT)*0.5) : null;
+
+    projected.push({...face, sv, depth, fill: shadedFill, stroke: shadedStroke});
   }
   projected.sort((a,b)=>b.depth-a.depth);
 
@@ -735,27 +818,61 @@ function drawChaseCam(fi) {
   }
   ctx.globalAlpha=1;
 
-  // Helmet — circle at projected body-frame position (no rotation needed for shape)
-  const hsc = _proj(_rv(R,[0.08,0.0,CC_H+0.50]),cx,cy,W);
+  // ── Helmet ──
+  const hsc = _proj(_rv(R,[0.08,0.0,CC_H+0.50]),cx,cy,W,cam);
   if (hsc) {
     const hr = W*0.052;
-    ctx.beginPath(); ctx.arc(hsc[0],hsc[1],hr*1.2,0,Math.PI*2);
-    ctx.fillStyle='#cc330033'; ctx.fill();
+    // Ambient occlusion halo
+    ctx.beginPath(); ctx.arc(hsc[0],hsc[1],hr*1.3,0,Math.PI*2);
+    ctx.fillStyle='#cc330022'; ctx.fill();
+    // Helmet dome — shaded from top-left light
+    const hGrad = ctx.createRadialGradient(
+      hsc[0]-hr*0.28, hsc[1]-hr*0.32, hr*0.05,
+      hsc[0], hsc[1], hr);
+    hGrad.addColorStop(0,'#ff6644');
+    hGrad.addColorStop(0.5,'#cc3300');
+    hGrad.addColorStop(1,'#661500');
     ctx.beginPath(); ctx.arc(hsc[0],hsc[1],hr,0,Math.PI*2);
-    ctx.fillStyle='#cc3300'; ctx.strokeStyle='#ff5533'; ctx.lineWidth=1.2;
+    ctx.fillStyle=hGrad; ctx.strokeStyle='#ff5533'; ctx.lineWidth=1.2;
     ctx.fill(); ctx.stroke();
+    // Specular highlight
+    ctx.beginPath(); ctx.arc(hsc[0]-hr*0.25,hsc[1]-hr*0.28,hr*0.18,0,Math.PI*2);
+    ctx.fillStyle='rgba(255,220,200,0.28)'; ctx.fill();
     // Visor slit
     ctx.beginPath();
     ctx.arc(hsc[0]+hr*0.06,hsc[1]+hr*0.08,hr*0.52,Math.PI*0.08,Math.PI*0.85);
     ctx.strokeStyle='#88ccff'; ctx.lineWidth=2.2; ctx.stroke();
+    // Visor sheen
+    ctx.beginPath();
+    ctx.arc(hsc[0]+hr*0.06,hsc[1]+hr*0.08,hr*0.52,Math.PI*0.08,Math.PI*0.40);
+    ctx.strokeStyle='rgba(200,240,255,0.45)'; ctx.lineWidth=1.0; ctx.stroke();
   }
 
-  // G-force arrow: from kart-centre (in world frame) along body-frame accel vector
+  // ── G-force arrow ──
+  // Remove gravity: gravity in world frame is [0,0,-1] g (down).
+  // Rotate to body frame using R^T (transpose), subtract, then negate
+  // so the arrow reads as motion acceleration (forward=accel, back=brake,
+  // into-turn=cornering).  Scale so 1 g = full arrow length.
+  const grav_body = [
+    R[0][2],   // R^T col 2 row 0  (world Z=down mapped to body frame)
+    R[1][2],
+    R[2][2],
+  ];
+  // motion accel in body frame (g units), negated so arrow points with motion
+  const ma = [
+    -(ax - grav_body[0]),
+    -(ay - grav_body[1]),
+    -(az - grav_body[2]),
+  ];
+  const gm_motion = Math.sqrt(ma[0]*ma[0]+ma[1]*ma[1]+ma[2]*ma[2]);
+  const gcol = gColor(gm_motion);
+  // Arrow length: 1 g → ARROW_SCALE metres in world space
+  const ARROW_SCALE = 0.55;
+  const maW = _rv(R, ma);   // rotate to world frame for projection
   const gOrig = [0, 0, CC_H+0.35];
-  const gDir  = _rv(R,[ax,ay,az]);   // body-frame accel → world frame
-  const gEnd  = gOrig.map((v,i)=>v+gDir[i]*0.40);
-  const goSc  = _proj(gOrig,cx,cy,W);
-  const geSc  = _proj(gEnd, cx,cy,W);
+  const gEnd  = gOrig.map((v,i) => v + maW[i] * ARROW_SCALE);
+  const goSc  = _proj(gOrig, cx, cy, W, cam);
+  const geSc  = _proj(gEnd,  cx, cy, W, cam);
   if (goSc&&geSc) {
     ctx.beginPath(); ctx.moveTo(goSc[0],goSc[1]); ctx.lineTo(geSc[0],geSc[1]);
     ctx.strokeStyle=gcol; ctx.lineWidth=2.5; ctx.lineCap='round'; ctx.stroke();
@@ -771,14 +888,14 @@ function drawChaseCam(fi) {
   // HUD overlay — top-left corner
   ctx.textAlign='left'; ctx.textBaseline='top';
   ctx.font='bold 11px monospace'; ctx.fillStyle=gcol;
-  ctx.fillText(`${gm.toFixed(2)} g`, 8, 8);
+  ctx.fillText(`${gm_motion.toFixed(2)} g`, 8, 8);
   ctx.font='10px monospace'; ctx.fillStyle='#506080';
   ctx.fillText(`R ${(S.roll[fi]||0).toFixed(1)}°  P ${(S.pitch[fi]||0).toFixed(1)}°`, 8, 22);
 
-  // Update sublabel readouts
-  document.getElementById('gx-val').textContent    = ax.toFixed(2);
-  document.getElementById('gy-val').textContent    = ay.toFixed(2);
-  document.getElementById('gmag-val').textContent  = gm.toFixed(2);
+  // Update sublabel readouts (motion-accel body frame: +x=fwd, +y=left, mag)
+  document.getElementById('gx-val').textContent    = ma[0].toFixed(2);
+  document.getElementById('gy-val').textContent    = ma[1].toFixed(2);
+  document.getElementById('gmag-val').textContent  = gm_motion.toFixed(2);
   document.getElementById('gmag-val').style.color  = gcol;
 }
 
