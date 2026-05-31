@@ -41,23 +41,50 @@ VERSION     = "v1.0"
 G_YELLOW    = 2.0          # g
 G_RED       = 4.0          # g
 
-# Kart wireframe dimensions (metres, body frame: +X fwd, +Y left, +Z up)
-KART_PTS = np.array([
-    [-0.85, -0.55, -0.25],   # 0 rear-right-bottom
-    [ 0.85, -0.55, -0.25],   # 1 front-right-bottom
-    [ 0.85,  0.55, -0.25],   # 2 front-left-bottom
-    [-0.85,  0.55, -0.25],   # 3 rear-left-bottom
-    [-0.85, -0.55,  0.25],   # 4 rear-right-top
-    [ 0.85, -0.55,  0.25],   # 5 front-right-top
-    [ 0.85,  0.55,  0.25],   # 6 front-left-top
-    [-0.85,  0.55,  0.25],   # 7 rear-left-top
+# ── 3-D kart geometry (body frame: +X=fwd, +Y=left, +Z=up) ──────────────────
+# Dimensions approximate a real cross-kart: 1.7 m long, 1.2 m wide.
+_H   = 0.15    # chassis ride height (m)
+_WR  = 0.22    # wheel radius (m)
+_WW  = 0.12    # wheel width  (m)
+_N_W = 16      # polygon sides per wheel disc
+
+_CHASSIS = np.array([
+    [ 0.75, -0.52, _H],
+    [ 0.75,  0.52, _H],
+    [-0.65,  0.52, _H],
+    [-0.65, -0.52, _H],
 ], dtype=np.float64)
 
-KART_EDGES = [
-    (0,1),(1,2),(2,3),(3,0),   # bottom face
-    (4,5),(5,6),(6,7),(7,4),   # top face
-    (0,4),(1,5),(2,6),(3,7),   # verticals
-]
+_RB_X, _RB_HW, _RB_H = -0.12, 0.40, 0.70
+_ROLLBAR = np.array([
+    [_RB_X, -_RB_HW, _H],
+    [_RB_X, -_RB_HW, _H + _RB_H],
+    [_RB_X,  _RB_HW, _H + _RB_H],
+    [_RB_X,  _RB_HW, _H],
+], dtype=np.float64)
+
+_SEAT = np.array([
+    [ 0.20, -0.28, _H],
+    [ 0.20,  0.28, _H],
+    [ 0.20,  0.28, _H + 0.40],
+    [ 0.20, -0.28, _H + 0.40],
+], dtype=np.float64)
+
+_NOSE = np.array([
+    [ 0.75, -0.30, _H],
+    [ 0.75,  0.30, _H],
+    [ 0.95,  0.00, _H + 0.06],
+], dtype=np.float64)
+
+_WHEEL_CENTRES = np.array([
+    [ 0.62,  0.60, _WR],
+    [ 0.62, -0.60, _WR],
+    [-0.52,  0.60, _WR],
+    [-0.52, -0.60, _WR],
+], dtype=np.float64)
+
+_HELM_C = np.array([0.08, 0.0, _H + 0.50], dtype=np.float64)
+_HELM_R = 0.18
 
 
 # ── Data classes ──────────────────────────────────────────────────────────────
@@ -224,6 +251,147 @@ def render_timeseries(
     return fig
 
 
+def _kart_scale(x_all: np.ndarray, y_all: np.ndarray) -> float:
+    """Return a kart marker size scaled to ~3.5% of the shorter track dimension."""
+    xr = float(x_all.max() - x_all.min())
+    yr = float(y_all.max() - y_all.min())
+    return max(2.0, min(xr, yr) * 0.035)
+
+
+def _speed_color(speed_mph: float, max_mph: float = 40.0) -> tuple:
+    """Map speed to a RdYlGn colour (slow=red, fast=green)."""
+    norm = float(np.clip(speed_mph / max_mph, 0.0, 1.0))
+    return plt.cm.RdYlGn(0.15 + norm * 0.75)
+
+
+def draw_kart_marker(
+    ax: plt.Axes,
+    x: float, y: float,
+    heading_deg: float,
+    speed_mph: float,
+    scale: float,
+) -> None:
+    """
+    Draw a top-down kart silhouette at map position (x, y).
+
+    heading_deg : compass bearing (0 = North, 90 = East)
+    scale       : overall size in map metres; kart body is ~1.1 × scale long
+    """
+    from matplotlib.patches import Circle
+
+    # Convert compass heading → screen angle (matplotlib: 0=East, CCW positive)
+    angle_rad = np.radians(90.0 - heading_deg)
+    cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
+    s = scale
+
+    def rot(pts: np.ndarray) -> np.ndarray:
+        """Rotate local kart coords (+x fwd, +y left) → world map coords."""
+        rx = pts[:, 0] * cos_a - pts[:, 1] * sin_a
+        ry = pts[:, 0] * sin_a + pts[:, 1] * cos_a
+        return np.column_stack([rx + x, ry + y])
+
+    body_color = _speed_color(speed_mph)
+
+    # ── Glow halo (two translucent circles under everything) ──────────────────
+    ax.add_patch(Circle((x, y), s * 0.80, color=body_color, alpha=0.10, zorder=8))
+    ax.add_patch(Circle((x, y), s * 0.55, color=body_color, alpha=0.12, zorder=8))
+
+    # ── Body silhouette (tapered, wider at rear) ──────────────────────────────
+    body_local = np.array([
+        [ 0.55,  0.00],   # nose tip
+        [ 0.45,  0.18],   # front-left shoulder
+        [ 0.20,  0.28],   # mid-left
+        [-0.30,  0.30],   # rear-left
+        [-0.55,  0.22],   # rear-left corner
+        [-0.55, -0.22],   # rear-right corner
+        [-0.30, -0.30],   # rear-right
+        [ 0.20, -0.28],   # mid-right
+        [ 0.45, -0.18],   # front-right shoulder
+        [ 0.55,  0.00],   # back to nose
+    ]) * s
+    ax.add_patch(plt.Polygon(
+        rot(body_local), closed=True,
+        facecolor=body_color, edgecolor="white",
+        linewidth=1.4, zorder=10, alpha=0.96,
+    ))
+
+    # ── Roll bar (dark band across the rear third of the body) ────────────────
+    rollbar_local = np.array([
+        [-0.12,  0.24],
+        [-0.12, -0.24],
+        [-0.30, -0.24],
+        [-0.30,  0.24],
+    ]) * s
+    ax.add_patch(plt.Polygon(
+        rot(rollbar_local), closed=True,
+        facecolor="#2a2a2a", edgecolor="#888888",
+        linewidth=0.8, zorder=11, alpha=0.85,
+    ))
+
+    # ── Four wheels ───────────────────────────────────────────────────────────
+    # Positions in kart-local fraction-of-s coords
+    wheel_positions = [
+        ( 0.38,  0.35),   # front-left
+        ( 0.38, -0.35),   # front-right
+        (-0.38,  0.35),   # rear-left
+        (-0.38, -0.35),   # rear-right
+    ]
+    ww = 0.22 * s   # wheel length (along kart axis)
+    wh = 0.12 * s   # wheel width  (across kart axis)
+
+    for wx, wy in wheel_positions:
+        wpts = np.array([
+            [wx * s - ww / 2, wy * s - wh / 2],
+            [wx * s + ww / 2, wy * s - wh / 2],
+            [wx * s + ww / 2, wy * s + wh / 2],
+            [wx * s - ww / 2, wy * s + wh / 2],
+        ])
+        ax.add_patch(plt.Polygon(
+            rot(wpts), closed=True,
+            facecolor="#111111", edgecolor="#cccccc",
+            linewidth=1.0, zorder=12,
+        ))
+
+    # ── Gold nose dot ─────────────────────────────────────────────────────────
+    nose_world = rot(np.array([[0.60 * s, 0.0]]))[0]
+    ax.scatter(
+        [nose_world[0]], [nose_world[1]],
+        s=22, color="#FFD700", zorder=13, linewidths=0,
+    )
+
+
+def draw_speed_trail(
+    ax: plt.Axes,
+    x_seg: np.ndarray,
+    y_seg: np.ndarray,
+    spd_seg: np.ndarray,   # m/s
+    max_mph: float = 40.0,
+) -> None:
+    """
+    Draw the recent trajectory as a speed-coloured LineCollection.
+    Colour map: slow = red, fast = green  (RdYlGn).
+    """
+    import matplotlib.collections as mc
+
+    if len(x_seg) < 2:
+        return
+
+    points   = np.array([x_seg, y_seg]).T.reshape(-1, 1, 2)
+    segments = np.concatenate([points[:-1], points[1:]], axis=1)
+    spd_norm = np.clip(spd_seg[:-1] * MPH / max_mph, 0.0, 1.0)
+
+    lc = mc.LineCollection(
+        segments,
+        cmap="RdYlGn",
+        norm=plt.Normalize(0.0, 1.0),
+        linewidth=4.5,
+        capstyle="round",
+        zorder=5,
+    )
+    lc.set_array(spd_norm)
+    ax.add_collection(lc)
+
+
 def render_track_map(
     sess: Session,
     idx: int,
@@ -233,70 +401,77 @@ def render_track_map(
 ) -> plt.Figure:
     """
     Top-down GPS track in local metres.
-    - Full/grey path always visible (context)
-    - Highlighted section depends on mode
-    - Coloured tail shows recent trajectory
-    - Gold dot = current position
-    - Gold triangles = event markers
+
+    Improvements over v1:
+    - Speed-coloured tail (RdYlGn) instead of flat orange
+    - Top-down kart silhouette with wheels, roll bar, and glow halo
+    - Kart auto-scales to ~3.5% of the shorter track dimension
+    - Darker, higher-contrast background
     """
-    df       = sess.df
-    lat_all  = df["lat"].to_numpy()
-    lon_all  = df["lon"].to_numpy()
-    x_all, y_all = latlon_to_local_m(lat_all, lon_all, sess.origin_lat, sess.origin_lon)
-    n        = len(df)
-    tail_n   = max(1, int(tail_s * sess.imu_hz))
+    df      = sess.df
+    x_all, y_all = latlon_to_local_m(
+        df["lat"].to_numpy(), df["lon"].to_numpy(),
+        sess.origin_lat, sess.origin_lon,
+    )
+    tail_n  = max(1, int(tail_s * sess.imu_hz))
+    scale   = _kart_scale(x_all, y_all)
 
     fig, ax = plt.subplots(figsize=(5, 5))
-    fig.patch.set_facecolor("#1a1a2e")
-    ax.set_facecolor("#1a1a2e")
+    fig.patch.set_facecolor("#0f0f1a")
+    ax.set_facecolor("#0f0f1a")
 
-    # Full path (dim background)
-    ax.plot(x_all, y_all, lw=0.8, color="#333355", zorder=1)
+    # ── Full path (dim background) ────────────────────────────────────────────
+    ax.plot(x_all, y_all, lw=0.9, color="#1a1a3e", zorder=1)
 
-    # Mode-dependent highlight
+    # ── Mode-dependent highlight ──────────────────────────────────────────────
     if mode == "grow":
-        hi_x, hi_y = x_all[:idx+1], y_all[:idx+1]
+        hi_x, hi_y = x_all[:idx + 1], y_all[:idx + 1]
     elif mode == "local" and window_idx is not None:
         a, b = window_idx
-        hi_x, hi_y = x_all[a:b+1], y_all[a:b+1]
+        hi_x, hi_y = x_all[a:b + 1], y_all[a:b + 1]
     else:   # "full"
         hi_x, hi_y = x_all, y_all
 
-    ax.plot(hi_x, hi_y, lw=1.2, color="#4C9BE8", zorder=2)
+    ax.plot(hi_x, hi_y, lw=1.2, color="#2a3a6e", zorder=2)
 
-    # Tail — round caps so both endpoints look intentional, not clipped.
-    # A small dot at the back end marks where the time window begins.
+    # ── Speed-coloured tail ───────────────────────────────────────────────────
     t0 = max(0, idx - tail_n)
-    ax.plot(x_all[t0:idx+1], y_all[t0:idx+1], lw=3.0, color="#E87C4C",
-            zorder=3, solid_capstyle="round")
-    if t0 < idx:
-        ax.scatter([x_all[t0]], [y_all[t0]], s=20, color="#E87C4C",
-                   zorder=3, marker="o", linewidths=0)
+    draw_speed_trail(
+        ax,
+        x_all[t0:idx + 1],
+        y_all[t0:idx + 1],
+        df["spd"].to_numpy()[t0:idx + 1],
+    )
 
-    # Current position
-    ax.scatter([x_all[idx]], [y_all[idx]], s=80, color="#FFD700",
-               zorder=5, marker="o", linewidths=0)
+    # ── Kart silhouette ───────────────────────────────────────────────────────
+    row = df.iloc[idx]
+    draw_kart_marker(
+        ax,
+        float(x_all[idx]), float(y_all[idx]),
+        float(row["hdg"]),
+        float(row["spd"]) * MPH,
+        scale,
+    )
 
-    # Event markers (all, always visible)
+    # ── Event markers ─────────────────────────────────────────────────────────
     mdf = df[df["marker"] != ""]
     if len(mdf):
         mi = mdf.index.to_numpy()
-        ax.scatter(x_all[mi], y_all[mi], s=30, color="#FFD700",
+        ax.scatter(x_all[mi], y_all[mi], s=28, color="#FFD700",
                    zorder=4, marker="^", linewidths=0)
-        # Label first 20 to avoid clutter
         for j in mi[:20]:
             ax.text(x_all[j], y_all[j], df.loc[j, "marker"],
                     color="#FFD700", fontsize=6, ha="left", va="bottom")
 
     ax.set_aspect("equal", adjustable="datalim")
-    ax.tick_params(colors="white", labelsize=6)
-    ax.set_xlabel("East (m)",  color="white", fontsize=7)
-    ax.set_ylabel("North (m)", color="white", fontsize=7)
-    ax.spines[:].set_color("#444")
-    ax.grid(True, lw=0.3, color="#333355")
+    ax.tick_params(colors="#555555", labelsize=6)
+    ax.set_xlabel("East (m)",  color="#555555", fontsize=7)
+    ax.set_ylabel("North (m)", color="#555555", fontsize=7)
+    ax.spines[:].set_color("#222222")
+    ax.grid(True, lw=0.3, color="#0d0d28")
 
     title = {"full": "Track (full)", "grow": "Track (growing)", "local": "Track (window)"}
-    ax.set_title(title.get(mode, "Track"), color="white", fontsize=8)
+    ax.set_title(title.get(mode, "Track"), color="#888888", fontsize=8)
     fig.tight_layout(pad=0.5)
     return fig
 
@@ -304,55 +479,159 @@ def render_track_map(
 def render_attitude(
     qw: float, qx: float, qy: float, qz: float,
     ax_ms2: float, ay_ms2: float, az_ms2: float,
+    speed_mph: float = 0.0,
 ) -> plt.Figure:
     """
-    Perspective wireframe of the kart rotated by the quaternion.
-    Draws:
-      - Wireframe box (kart body)
-      - Blue arrow: forward (+X) direction
-      - Coloured arrow: total G-vector in body frame
+    Chase-cam 3-D view of the kart rotated by the quaternion.
+
+    Camera sits ~5 ft behind and ~5 ft above the kart, looking forward —
+    the same POV used in racing games.  Roll and pitch are immediately
+    readable from the horizon tilt and nose angle.
+
+    Draws: chassis panel, roll bar, seat, nose wedge, four wheels with
+    spokes, driver helmet with visor, G-vector arrow, forward arrow,
+    ground-plane grid.
     """
-    R   = quat_to_rotmat(qw, qx, qy, qz)
-    rot = (R @ KART_PTS.T).T          # rotate all vertices
-    p2d = perspective_project(rot)    # project to 2D
+    from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
-    g_vec  = np.array([ax_ms2, ay_ms2, az_ms2]) / G0
-    g_mag  = float(np.linalg.norm(g_vec))
+    R      = quat_to_rotmat(qw, qx, qy, qz)
+    g_vec  = np.array([ax_ms2, ay_ms2, az_ms2])
+    g_mag  = float(np.linalg.norm(g_vec)) / G0
     g_col  = "#4CE84C" if g_mag < G_YELLOW else ("#FFD700" if g_mag < G_RED else "#E84C4C")
+    sp_norm = float(np.clip(speed_mph / 40.0, 0.0, 1.0))
+    body_col = plt.cm.RdYlGn(0.15 + sp_norm * 0.75)
 
-    fig, ax = plt.subplots(figsize=(3.5, 3.5))
-    fig.patch.set_facecolor("#1a1a2e")
-    ax.set_facecolor("#1a1a2e")
+    def Rp(pts: np.ndarray) -> np.ndarray:
+        """Rotate body-frame points into world frame."""
+        return (R @ pts.T).T
 
-    # Wireframe edges
-    for a_i, b_i in KART_EDGES:
-        ax.plot([p2d[a_i, 0], p2d[b_i, 0]],
-                [p2d[a_i, 1], p2d[b_i, 1]],
-                lw=1.4, color="#4C9BE8")
+    fig = plt.figure(figsize=(3.8, 3.8), facecolor="#0f0f1a")
+    ax3 = fig.add_subplot(111, projection="3d", facecolor="#0f0f1a")
 
-    # Forward arrow (+X in body frame, projected)
-    fwd_world  = R @ np.array([1.2, 0.0, 0.0])
-    fwd_2d     = perspective_project(fwd_world.reshape(1, 3))[0]
-    ax.annotate("", xy=fwd_2d, xytext=(0, 0),
-                arrowprops=dict(arrowstyle="-|>", color="#4CE8E8", lw=1.5))
+    # ── Ground grid ───────────────────────────────────────────────────────────
+    gc = "#111133"
+    for xi in np.linspace(-2.2, 2.2, 10):
+        ax3.plot([xi, xi], [-2.2, 2.2], [0, 0], color=gc, lw=0.5, zorder=0)
+    for yi in np.linspace(-2.2, 2.2, 10):
+        ax3.plot([-2.2, 2.2], [yi, yi], [0, 0], color=gc, lw=0.5, zorder=0)
 
-    # G-vector arrow (body-frame acceleration, scaled)
-    g_world    = R @ (g_vec * 0.65)   # scale for visual clarity
-    g_2d       = perspective_project(g_world.reshape(1, 3))[0]
-    ax.annotate("", xy=g_2d, xytext=(0, 0),
-                arrowprops=dict(arrowstyle="-|>", color=g_col, lw=2.5))
+    # ── Chassis floor panel ───────────────────────────────────────────────────
+    ch = Rp(_CHASSIS)
+    ax3.add_collection3d(Poly3DCollection(
+        [ch], alpha=0.30, facecolor=body_col, edgecolor="#888888", lw=1.2))
+    ch_c = np.vstack([ch, ch[0]])
+    ax3.plot(ch_c[:, 0], ch_c[:, 1], ch_c[:, 2], color="#aaaaaa", lw=1.8)
 
-    ax.text(0.02, 0.97, f"|a| = {g_mag:.2f} g",
-            transform=ax.transAxes, color=g_col,
-            fontsize=9, va="top", ha="left",
-            bbox=dict(facecolor="#111", edgecolor="none", alpha=0.7))
+    # ── Nose wedge ────────────────────────────────────────────────────────────
+    ax3.add_collection3d(Poly3DCollection(
+        [Rp(_NOSE)], alpha=0.75, facecolor=body_col, edgecolor="white", lw=1.0))
 
-    ax.set_xlim(-2.0, 2.0)
-    ax.set_ylim(-2.0, 2.0)
-    ax.set_xticks([]); ax.set_yticks([])
-    ax.set_title("Attitude + G-vector", color="white", fontsize=8)
-    ax.spines[:].set_color("#333")
-    fig.tight_layout(pad=0.3)
+    # ── Seat back ─────────────────────────────────────────────────────────────
+    ax3.add_collection3d(Poly3DCollection(
+        [Rp(_SEAT)], alpha=0.65, facecolor="#2a2a2a", edgecolor="#666666", lw=0.8))
+
+    # ── Roll bar ──────────────────────────────────────────────────────────────
+    rb = Rp(_ROLLBAR)
+    rb_c = np.vstack([rb, rb[0]])
+    ax3.plot(rb_c[:, 0], rb_c[:, 1], rb_c[:, 2], color="#cccccc", lw=3.5, zorder=4)
+
+    # ── Wheels ────────────────────────────────────────────────────────────────
+    angles = np.linspace(0, 2 * math.pi, _N_W, endpoint=False)
+    for wx, wy, wz in _WHEEL_CENTRES:
+        # Inner and outer disc faces
+        face_in = Rp(np.column_stack([
+            wx + _WR * np.cos(angles),
+            np.full(_N_W, wy - np.sign(wy) * _WW / 2),
+            wz + _WR * np.sin(angles),
+        ]))
+        face_out = Rp(np.column_stack([
+            wx + _WR * np.cos(angles),
+            np.full(_N_W, wy + np.sign(wy) * _WW / 2),
+            wz + _WR * np.sin(angles),
+        ]))
+        for face in (face_in, face_out):
+            ax3.add_collection3d(Poly3DCollection(
+                [face], alpha=0.92, facecolor="#111111", edgecolor="#bbbbbb", lw=0.8))
+
+        # Three spokes
+        for sa in [0.0, math.pi * 2 / 3, math.pi * 4 / 3]:
+            sp = Rp(np.array([
+                [wx, wy, wz],
+                [wx + _WR * 0.82 * math.cos(sa), wy, wz + _WR * 0.82 * math.sin(sa)],
+            ]))
+            ax3.plot(sp[:, 0], sp[:, 1], sp[:, 2], color="#555555", lw=1.2)
+
+        # Axle stub
+        axle = Rp(np.array([
+            [wx, wy - _WW * 0.6, wz],
+            [wx, wy + _WW * 0.6, wz],
+        ]))
+        ax3.plot(axle[:, 0], axle[:, 1], axle[:, 2], color="#888888", lw=2.5)
+
+    # ── Helmet ────────────────────────────────────────────────────────────────
+    hc_w = Rp(_HELM_C.reshape(1, 3))[0]
+    u_h, v_h = np.mgrid[0:math.pi:8j, 0:2*math.pi:12j]
+    hx = hc_w[0] + _HELM_R * np.sin(u_h) * np.cos(v_h)
+    hy = hc_w[1] + _HELM_R * np.sin(u_h) * np.sin(v_h)
+    hz = hc_w[2] + _HELM_R * np.cos(u_h)
+    ax3.plot_surface(hx, hy, hz, color="#cc3300", alpha=0.92, linewidth=0, zorder=5)
+
+    # Visor
+    visor = Rp(np.array([
+        [_HELM_C[0] + _HELM_R * 0.60,  _HELM_C[1] - _HELM_R * 0.50, _HELM_C[2] + _HELM_R * 0.10],
+        [_HELM_C[0] + _HELM_R * 0.60,  _HELM_C[1] + _HELM_R * 0.50, _HELM_C[2] + _HELM_R * 0.10],
+        [_HELM_C[0] + _HELM_R * 0.55,  _HELM_C[1] + _HELM_R * 0.50, _HELM_C[2] - _HELM_R * 0.30],
+        [_HELM_C[0] + _HELM_R * 0.55,  _HELM_C[1] - _HELM_R * 0.50, _HELM_C[2] - _HELM_R * 0.30],
+    ]))
+    ax3.add_collection3d(Poly3DCollection(
+        [visor], alpha=0.70, facecolor="#88ccff", edgecolor="#445566", lw=0.5))
+
+    # ── Arrows ────────────────────────────────────────────────────────────────
+    # G-vector (in body frame → world)
+    g_world = R @ (g_vec / G0 * 0.55)
+    ax3.quiver(0, 0, _H + 0.30,
+               g_world[0], g_world[1], g_world[2],
+               color=g_col, linewidth=2.5, arrow_length_ratio=0.28, zorder=6)
+
+    # Forward direction
+    fwd = R @ np.array([0.9, 0.0, 0.0])
+    ax3.quiver(0, 0, _H + 0.10,
+               fwd[0], fwd[1], fwd[2],
+               color="#4CE8E8", linewidth=1.5, arrow_length_ratio=0.30)
+
+    # ── HUD labels ────────────────────────────────────────────────────────────
+    roll_deg  = math.degrees(math.atan2(
+        2*(qw*qx + qy*qz), 1 - 2*(qx*qx + qy*qy)))
+    pitch_deg = math.degrees(math.asin(
+        max(-1.0, min(1.0, 2*(qw*qy - qz*qx)))))
+
+    ax3.text2D(0.03, 0.97, f"|a| = {g_mag:.2f} g",
+               transform=ax3.transAxes, color=g_col, fontsize=9, va="top",
+               bbox=dict(facecolor="#111", edgecolor="none", alpha=0.75))
+    ax3.text2D(0.03, 0.87, f"{speed_mph:.1f} mph",
+               transform=ax3.transAxes, color="white", fontsize=9, va="top",
+               bbox=dict(facecolor="#111", edgecolor="none", alpha=0.75))
+    ax3.text2D(0.03, 0.77, f"R {roll_deg:+.1f}°  P {pitch_deg:+.1f}°",
+               transform=ax3.transAxes, color="#aaaaaa", fontsize=8, va="top",
+               bbox=dict(facecolor="#111", edgecolor="none", alpha=0.75))
+
+    # ── Camera — chase-cam POV: behind and slightly above ─────────────────────
+    # elev=18° above horizon, azim=-155° puts the kart nose pointing away
+    ax3.view_init(elev=18, azim=-155)
+    ax3.set_xlim(-0.67, 0.67)
+    ax3.set_ylim(-0.67, 0.67)
+    ax3.set_zlim(-0.02, 0.60)
+    ax3.set_box_aspect([4, 4, 2])
+    ax3.set_xticks([]); ax3.set_yticks([]); ax3.set_zticks([])
+    ax3.set_title("Chase-cam view", color="#888888", fontsize=8, pad=2)
+
+    # Hide pane backgrounds
+    for pane in (ax3.xaxis.pane, ax3.yaxis.pane, ax3.zaxis.pane):
+        pane.fill = False
+        pane.set_edgecolor("#111111")
+    ax3.grid(False)
+
+    fig.tight_layout(pad=0.2)
     return fig
 
 
@@ -569,6 +848,7 @@ def main() -> None:
             float(row["qw"]), float(row["qx"]),
             float(row["qy"]), float(row["qz"]),
             float(row["ax"]), float(row["ay"]), float(row["az"]),
+            speed_mph=spd_now,
         )
         st.pyplot(att_fig, width='stretch')
         plt.close(att_fig)

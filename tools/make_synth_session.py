@@ -88,8 +88,8 @@ class GenParams:
     track:       str   = "mixed"
     aggression:  float = 0.70    # 0..1
     seed:        int   = 1
-    origin_lat:  float = 32.0809
-    origin_lon:  float = -81.0912
+    origin_lat:  float = 39.2963   # 9059 Black Rabbit Rd, Leesburg OH
+    origin_lon:  float = -83.5573
     loop_m:      float = 520.0   # approximate track perimeter
 
 
@@ -165,6 +165,9 @@ def make_track_xy(
         r = r0 * (1.0 + 0.14 * np.sin(2 * t) + 0.09 * np.sin(5 * t + 0.5))
         return r * np.cos(t) + 4.0 * np.sin(2 * t), r * np.sin(t) + 3.5 * np.sin(3 * t + 0.4)
 
+    if track == "paul":
+        return _make_paul_track(n_pts)
+
     # "mixed" — default
     r = r0 * (1.0 + 0.20 * np.sin(3 * t) + 0.11 * np.sin(9 * t + 0.9))
     x = r * np.cos(t) + 6.5 * np.sin(2 * t + 0.3)
@@ -172,6 +175,97 @@ def make_track_xy(
     # one chicane bump
     x += 3.5 * np.exp(-((t - 2.8) ** 2) / 0.03) - 3.5 * np.exp(-((t - 3.1) ** 2) / 0.03)
     return x, y
+
+
+def _make_paul_track(n_pts: int) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Centerline of Paul & Gary's actual cross-kart track.
+
+    Source: Google Maps aerial (May 2026), 9059 Black Rabbit Rd, Leesburg OH.
+    Measured property width 735 ft (224 m).  Track ~5 acres, ~0.53 miles.
+
+    Driving direction: COUNTER-CLOCKWISE.  No self-intersection.
+
+    Origin (0, 0) = Start/Finish line at the east edge of the property
+    near the road.  x = East, y = North.
+
+    Feature map (CCW from S/F):
+      0  S/F at right/east edge, heading north
+      1-3  Up the right side
+      4-10 Tight teardrop loop at top-right (CW sub-loop)
+      11-16 Across the top heading west, through S-curves
+      17-19 Sweeping south-west into the big left loop
+      20-26 Big CCW loop around the left grass paddock (the dominant feature)
+      27-28 Return east along the south edge back to S/F
+    """
+    raw = np.array([
+        #  S/F and right-side straight heading north
+        [  0,   0],   #  0  S/F
+        [ 12,  39],   #  1
+        [ 23,  85],   #  2
+        [ 31, 116],   #  3
+
+        # Teardrop loop at top-right
+        [ 43, 140],   #  4  loop entry
+        [ 65, 152],   #  5
+        [ 74, 174],   #  6  top
+        [ 62, 189],   #  7
+        [ 40, 183],   #  8
+        [ 28, 164],   #  9
+        [ 40, 143],   # 10  loop exit
+
+        # Across the top heading west
+        [ 12, 143],   # 11
+        [-19, 136],   # 12
+
+        # S-curves
+        [-43, 146],   # 13  left
+        [-68, 127],   # 14  right
+        [-90, 140],   # 15  left
+        [-116, 124],  # 16
+
+        # Sweeping south-west into big left loop
+        [-140, 101],  # 17
+        [-163,  70],  # 18
+        [-174,  34],  # 19
+
+        # Big CCW loop around left grass paddock
+        [-178,  -8],  # 20
+        [-171, -43],  # 21
+        [-147, -65],  # 22
+        [-112, -74],  # 23  southernmost
+        [ -74, -65],  # 24
+        [ -50, -43],  # 25
+        [ -34, -12],  # 26  loop exit
+
+        # Return east to S/F
+        [ -19,  -9],  # 27
+        [   0,   0],  # 28  S/F
+    ], dtype=float)
+
+    # Centre on centroid so GPS origin places the track correctly
+    raw[:, 0] -= raw[:, 0].mean()
+    raw[:, 1] -= raw[:, 1].mean()
+
+    # Periodic cubic spline via wrap-and-trim
+    n_wrap = 4
+    wx = np.r_[raw[-n_wrap:, 0], raw[:, 0], raw[:n_wrap, 0]]
+    wy = np.r_[raw[-n_wrap:, 1], raw[:, 1], raw[:n_wrap, 1]]
+
+    diffs   = np.diff(np.column_stack([wx, wy]), axis=0)
+    seg_len = np.sqrt((diffs ** 2).sum(axis=1))
+    seg_len = np.where(seg_len < 1e-9, 1e-9, seg_len)
+    u       = np.r_[0.0, np.cumsum(seg_len)]
+
+    from scipy.interpolate import CubicSpline  # type: ignore[import]
+    cs_x = CubicSpline(u, wx, bc_type="not-a-knot")
+    cs_y = CubicSpline(u, wy, bc_type="not-a-knot")
+
+    u_start = u[n_wrap]
+    u_end   = u[n_wrap + len(raw)]
+    u_new   = np.linspace(u_start, u_end, n_pts, endpoint=False)
+
+    return cs_x(u_new), cs_y(u_new)
 
 
 def arc_length_table(x: np.ndarray, y: np.ndarray) -> Tuple[np.ndarray, float]:
@@ -610,11 +704,13 @@ def main() -> int:
     ap.add_argument("--imu-hz",     type=int,   default=50)
     ap.add_argument("--gps-hz",     type=int,   default=10)
     ap.add_argument("--track",      default="mixed",
-                    choices=["oval", "twisty", "hill", "mixed"])
+                    choices=["oval", "twisty", "hill", "mixed", "paul"])
     ap.add_argument("--aggression", type=float, default=0.70,   help="0.0 (easy) to 1.0 (wild)")
     ap.add_argument("--seed",       type=int,   default=1)
-    ap.add_argument("--origin-lat", type=float, default=32.0809)
-    ap.add_argument("--origin-lon", type=float, default=-81.0912)
+    ap.add_argument("--origin-lat", type=float, default=39.2963,
+                    help="GPS lat of track centroid (default: Leesburg OH)")
+    ap.add_argument("--origin-lon", type=float, default=-83.5573,
+                    help="GPS lon of track centroid (default: Leesburg OH)")
     ap.add_argument("--loop-m",     type=float, default=520.0,  help="Approx track perimeter (m)")
     ap.add_argument("--validate",   action="store_true",        help="Run plausibility checks")
     args = ap.parse_args()
