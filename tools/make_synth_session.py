@@ -51,7 +51,7 @@ G0 = 9.80665  # m/s²
 # ── Kart physical envelope ────────────────────────────────────────────────────
 # These are realistic limits for a cross-kart at spirited play.
 V_MAX_MPS        = 22.0          # ~49 mph absolute top
-V_MIN_MPS        =  2.0          # kart always keeps moving
+V_MIN_MPS        =  4.5          # ~10 mph — kart rarely goes slower than this
 A_LON_MAX        =  1.0 * G0     # max forward accel  (~1 g, kart is light)
 A_LON_MIN        = -2.0 * G0     # max braking        (~2 g, aggressive)
 A_LAT_MAX        =  2.5 * G0     # max lateral        (~2.5 g, hard cornering)
@@ -326,7 +326,7 @@ def compute_target_speed(
     v_target = v_straight / (1 + k_c * v_straight^2 * |kappa|)
     where k_c is chosen so lateral accel ≈ A_LAT_MAX at max cornering.
     """
-    v_straight = 12.0 + 10.0 * aggression   # m/s  (~27–49 mph)
+    v_straight = 5.0 + 12.0 * aggression    # m/s  (~11–38 mph); 30 mph at default aggression 0.70
     # k_c: at full kappa usage, a_lat = v²·|kappa| = A_LAT_MAX
     # v_corner = sqrt(A_LAT_MAX / |kappa_typical|)
     # We use a soft cornering model:
@@ -436,7 +436,7 @@ def generate(p: GenParams) -> pd.DataFrame:
 
     # Pre-compute curvature at each sample position (forward pass)
     # We need a rough speed to estimate s_pos.  Use v_base for the first pass.
-    v_base_est = 12.0 + 10.0 * p.aggression
+    v_base_est = 5.0 + 12.0 * p.aggression
     s_positions = np.cumsum(np.full(n, v_base_est * dt))
     s_positions = np.r_[0.0, s_positions[:-1]]
 
@@ -656,8 +656,8 @@ def validate(df: pd.DataFrame, params: GenParams) -> bool:
           f"Seed: {params.seed}   Duration: {params.duration_s:.0f}s")
     print()
 
-    check("Top speed (mph)",            spd_mph.max(),              10, 50)
-    check("Mean speed (mph)",           spd_mph.mean(),              8, 38)
+    check("Top speed (mph)",            spd_mph.max(),              10, 45)
+    check("Mean speed (mph)",           spd_mph.mean(),             10, 30)
     check("Peak |a| (g)",               g_mag.max(),                 0, 15)
     check("Mean |a| (g)",               g_mag.mean(),              0.5,  4)
     check("Peak lateral ay (g)",        abs(df.ay).max() / G,        0,  3)
