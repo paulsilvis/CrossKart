@@ -146,7 +146,7 @@
 
   #map-panel   { grid-column: 1; grid-row: 1 / 3; }
   #speed-panel { grid-column: 2; grid-row: 1; }
-  #gforce-panel{ grid-column: 3; grid-row: 1; }
+  #chase-panel { grid-column: 3; grid-row: 1; }
   #strip-panel {
     grid-column: 2 / 4;
     grid-row: 2;
@@ -169,11 +169,15 @@
   }
   #speed-unit { font-size: 9px; color: var(--muted); letter-spacing: 2px; }
 
+  /* Chase-cam canvas — fills panel between label and sublabels */
+  #chase-canvas { flex: 1; min-height: 0; width: 100%; align-self: stretch; }
+
   /* G-force sub-labels */
   .g-sublabels {
     display: flex;
     gap: 20px;
     margin-top: 4px;
+    flex-shrink: 0;
   }
   .g-sub { text-align: center; }
   .g-sub-val { font-size: 13px; font-weight: 600; color: var(--accent); }
@@ -280,9 +284,9 @@
     <div id="speed-unit">MPH</div>
   </div>
 
-  <div class="panel" id="gforce-panel">
-    <div class="panel-label">G-FORCE</div>
-    <canvas id="gforce-canvas" width="200" height="200"></canvas>
+  <div class="panel" id="chase-panel">
+    <div class="panel-label">CHASE CAM</div>
+    <canvas id="chase-canvas"></canvas>
     <div class="g-sublabels">
       <div class="g-sub"><div class="g-sub-val" id="gx-val">0.00</div><div class="g-sub-lbl">LAT-G</div></div>
       <div class="g-sub"><div class="g-sub-val" id="gy-val">0.00</div><div class="g-sub-lbl">LON-G</div></div>
@@ -576,77 +580,185 @@ function drawSpeedometer(speed) {
 }
 
 // ════════════════════════════════════════════════════════
-//  G-Force meter
+//  Chase-cam 3-D view
+//  Camera: 5 ft behind (+−X), 5 ft above (Z), looking at kart.
+//  Kart geometry in body frame: +X=forward, +Y=left, +Z=up.
+//  Quaternion rotates body → world frame each frame.
+//  Painter's algorithm (sort faces by depth, draw back-to-front).
 // ════════════════════════════════════════════════════════
-const G_TRAIL = 30;
-const gTrailX = new Float32Array(G_TRAIL);
-const gTrailY = new Float32Array(G_TRAIL);
-let gTrailHead = 0;
 
-function drawGForce(ax, ay, gmag) {
-  const canvas = document.getElementById('gforce-canvas');
-  const ctx = canvas.getContext('2d');
-  const W = canvas.width, H = canvas.height;
-  const cx = W/2, cy = H/2 + 4, r = W * 0.40;
-  const maxG = 2.5;
+// ── Camera (fixed world-space position) ──
+const CC_H=0.15, CC_WR=0.22, CC_WW=0.10, CC_NW=10;  // kart dims
+const CAM_POS    = [-1.52, 0.0,  1.52];   // 5 ft back, 5 ft up
+const CAM_TARGET = [ 0.15, 0.0,  0.22];   // kart centre / roll-bar level
 
-  ctx.clearRect(0, 0, W, H);
+function _n3(v){ const l=Math.hypot(v[0],v[1],v[2]); return[v[0]/l,v[1]/l,v[2]/l]; }
+function _x3(a,b){ return[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]]; }
+function _d3(a,b){ return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
+function _s3(a,b){ return[a[0]-b[0],a[1]-b[1],a[2]-b[2]]; }
 
-  // Grid rings
-  ctx.setLineDash([]);
-  for (const g of [2.5, 1.5, 0.75]) {
-    const gr = r * (g / maxG);
-    ctx.beginPath(); ctx.arc(cx, cy, gr, 0, Math.PI*2);
-    ctx.strokeStyle = g === 2.5 ? '#1e2d44' : '#141b2d';
-    ctx.lineWidth = g === 2.5 ? 1 : 0.75;
-    ctx.stroke();
+const _CF = _n3(_s3(CAM_TARGET, CAM_POS));       // camera forward
+const _CR = _n3(_x3(_CF, [0,0,1]));              // camera right
+const _CU = _x3(_CR, _CF);                       // camera up
+
+// Project a world-space point to canvas [sx, sy, depth]; null if behind cam.
+function _proj(pt, cx, cy, W) {
+  const v = _s3(pt, CAM_POS);
+  const rz = _d3(v, _CF);
+  if (rz < 0.05) return null;
+  const f = W * 0.72;
+  return [cx + _d3(v,_CR)*f/rz, cy - _d3(v,_CU)*f/rz, rz];
+}
+
+// Quaternion → 3×3 rotation matrix (body → world).
+function _qmat(qw,qx,qy,qz){ return [
+  [1-2*(qy*qy+qz*qz),   2*(qx*qy-qw*qz),   2*(qx*qz+qw*qy)],
+  [  2*(qx*qy+qw*qz), 1-2*(qx*qx+qz*qz),   2*(qy*qz-qw*qx)],
+  [  2*(qx*qz-qw*qy),   2*(qy*qz+qw*qx), 1-2*(qx*qx+qy*qy)],
+]; }
+
+function _rv(M,v){ return[
+  M[0][0]*v[0]+M[0][1]*v[1]+M[0][2]*v[2],
+  M[1][0]*v[0]+M[1][1]*v[1]+M[1][2]*v[2],
+  M[2][0]*v[0]+M[2][1]*v[1]+M[2][2]*v[2],
+]; }
+
+// ── Kart face list in body frame (built once at load) ──
+function _buildKart() {
+  const f = [];
+  const push = (v, fill, stroke, lw, alpha) => f.push({v, fill, stroke, lw, alpha});
+
+  // Chassis floor
+  push([[0.75,-0.52,CC_H],[0.75,0.52,CC_H],[-0.65,0.52,CC_H],[-0.65,-0.52,CC_H]],
+       'body','#8899aa',1.2,0.88);
+  // Nose wedge
+  push([[0.75,-0.28,CC_H],[0.75,0.28,CC_H],[0.95,0.0,CC_H+0.07]],
+       'body','#ffffff',1.0,0.95);
+  // Seat back
+  push([[0.22,-0.26,CC_H],[0.22,0.26,CC_H],[0.22,0.26,CC_H+0.40],[0.22,-0.26,CC_H+0.40]],
+       '#1e1e1e','#555555',0.8,0.82);
+  // Roll bar (front face — most visible from behind)
+  push([[-0.10,-0.38,CC_H],[-0.10,0.38,CC_H],
+        [-0.10,0.38,CC_H+0.72],[-0.10,-0.38,CC_H+0.72]],
+       '#444444','#cccccc',2.0,0.93);
+
+  // Wheels — each as outer disc + inner disc + NW tread quads
+  const wcs = [[0.60,0.64,CC_WR],[0.60,-0.64,CC_WR],
+               [-0.50,0.64,CC_WR],[-0.50,-0.64,CC_WR]];
+  const angs = Array.from({length:CC_NW},(_,i)=>2*Math.PI*i/CC_NW);
+
+  for (const [wx,wy,wz] of wcs) {
+    const s = Math.sign(wy);
+    const out = angs.map(a=>[wx+CC_WR*Math.cos(a), wy+s*CC_WW, wz+CC_WR*Math.sin(a)]);
+    const inn = angs.map(a=>[wx+CC_WR*Math.cos(a), wy-s*CC_WW, wz+CC_WR*Math.sin(a)]);
+    push(out, '#111111','#999999',0.8,0.96);
+    push(inn, '#111111','#444444',0.5,0.92);
+    for (let i=0;i<CC_NW;i++){
+      const j=(i+1)%CC_NW;
+      push([out[i],out[j],inn[j],inn[i]],'#1c1c1c','#333333',0.3,0.90);
+    }
+  }
+  return f;
+}
+const KART_FACES = _buildKart();
+
+function drawChaseCam(fi) {
+  const canvas = document.getElementById('chase-canvas');
+  const panel  = document.getElementById('chase-panel');
+  const ctx    = canvas.getContext('2d');
+
+  // Sync pixel size to CSS layout size each frame (handles resize automatically)
+  const pw = Math.max(1, panel.clientWidth);
+  const ph = Math.max(1, panel.clientHeight - 48);  // leave room for sublabels
+  if (canvas.width !== pw || canvas.height !== ph) { canvas.width=pw; canvas.height=ph; }
+  const W=canvas.width, H=canvas.height, cx=W/2, cy=H/2;
+
+  ctx.fillStyle = '#080b12';
+  ctx.fillRect(0, 0, W, H);
+
+  const qw=S.qw[fi],qx=S.qx[fi],qy=S.qy[fi],qz=S.qz[fi];
+  const ax=S.ax[fi],ay=S.ay[fi],az=S.az[fi];
+  const gm = Math.sqrt(ax*ax+ay*ay+az*az);
+  const gcol = gColor(gm);
+  const R = _qmat(qw,qx,qy,qz);
+
+  // Ground grid (world-space Z=0 plane)
+  ctx.strokeStyle='#0d1428'; ctx.lineWidth=0.5;
+  for (let i=-5;i<=5;i++) {
+    const a=_proj([i*0.4,-2,0],cx,cy,W), b=_proj([i*0.4,2,0],cx,cy,W);
+    const c=_proj([-2,i*0.4,0],cx,cy,W), d=_proj([2,i*0.4,0],cx,cy,W);
+    if(a&&b){ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke();}
+    if(c&&d){ctx.beginPath();ctx.moveTo(c[0],c[1]);ctx.lineTo(d[0],d[1]);ctx.stroke();}
   }
 
-  // Crosshairs
-  ctx.strokeStyle = '#141b2d'; ctx.lineWidth = 0.75;
-  ctx.beginPath(); ctx.moveTo(cx - r, cy); ctx.lineTo(cx + r, cy); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(cx, cy - r); ctx.lineTo(cx, cy + r); ctx.stroke();
+  // Rotate kart faces into world frame, project, sort back-to-front
+  const bcol = spdColor(S.spd[fi], S.meta.top_mph);
+  const projected = [];
+  for (const face of KART_FACES) {
+    const wv  = face.v.map(v=>_rv(R,v));
+    const sv  = wv.map(v=>_proj(v,cx,cy,W));
+    if (sv.some(p=>p===null)) continue;
+    const depth = sv.reduce((s,p)=>s+p[2],0)/sv.length;
+    projected.push({...face, sv, depth, fill: face.fill==='body' ? bcol : face.fill});
+  }
+  projected.sort((a,b)=>b.depth-a.depth);
 
-  // Cardinal labels
-  ctx.fillStyle = '#1e3050'; ctx.font = '9px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText('F', cx, cy - r + 8);
-  ctx.fillText('B', cx, cy + r - 8);
-  ctx.fillText('L', cx - r + 8, cy);
-  ctx.fillText('R', cx + r - 8, cy);
+  for (const f of projected) {
+    ctx.globalAlpha = f.alpha??1;
+    ctx.beginPath();
+    ctx.moveTo(f.sv[0][0],f.sv[0][1]);
+    for(let i=1;i<f.sv.length;i++) ctx.lineTo(f.sv[i][0],f.sv[i][1]);
+    ctx.closePath();
+    ctx.fillStyle=f.fill; ctx.fill();
+    if(f.stroke){ctx.strokeStyle=f.stroke;ctx.lineWidth=f.lw||1;ctx.stroke();}
+  }
+  ctx.globalAlpha=1;
 
-  // G-ring labels
-  ctx.fillStyle = '#1e3050'; ctx.font = '8px monospace';
-  ctx.fillText('1g', cx + r*0.6 + 8, cy - 5);
-
-  // Ghost trail
-  gTrailX[gTrailHead % G_TRAIL] = ax;
-  gTrailY[gTrailHead % G_TRAIL] = ay;
-  gTrailHead++;
-  for (let i = 0; i < G_TRAIL; i++) {
-    const ti = (gTrailHead - G_TRAIL + i + G_TRAIL) % G_TRAIL;
-    const px = cx + (gTrailX[ti] / maxG) * r;
-    const py = cy - (gTrailY[ti] / maxG) * r;
-    const alpha = i / G_TRAIL * 0.25;
-    ctx.beginPath(); ctx.arc(px, py, 4, 0, Math.PI*2);
-    ctx.fillStyle = `rgba(0,200,120,${alpha})`; ctx.fill();
+  // Helmet — circle at projected body-frame position (no rotation needed for shape)
+  const hsc = _proj(_rv(R,[0.08,0.0,CC_H+0.50]),cx,cy,W);
+  if (hsc) {
+    const hr = W*0.052;
+    ctx.beginPath(); ctx.arc(hsc[0],hsc[1],hr*1.2,0,Math.PI*2);
+    ctx.fillStyle='#cc330033'; ctx.fill();
+    ctx.beginPath(); ctx.arc(hsc[0],hsc[1],hr,0,Math.PI*2);
+    ctx.fillStyle='#cc3300'; ctx.strokeStyle='#ff5533'; ctx.lineWidth=1.2;
+    ctx.fill(); ctx.stroke();
+    // Visor slit
+    ctx.beginPath();
+    ctx.arc(hsc[0]+hr*0.06,hsc[1]+hr*0.08,hr*0.52,Math.PI*0.08,Math.PI*0.85);
+    ctx.strokeStyle='#88ccff'; ctx.lineWidth=2.2; ctx.stroke();
   }
 
-  // G dot
-  const px = cx + (ax / maxG) * r;
-  const py = cy - (ay / maxG) * r;
-  const col = gColor(gmag);
+  // G-force arrow: from kart-centre (in world frame) along body-frame accel vector
+  const gOrig = [0, 0, CC_H+0.35];
+  const gDir  = _rv(R,[ax,ay,az]);   // body-frame accel → world frame
+  const gEnd  = gOrig.map((v,i)=>v+gDir[i]*0.40);
+  const goSc  = _proj(gOrig,cx,cy,W);
+  const geSc  = _proj(gEnd, cx,cy,W);
+  if (goSc&&geSc) {
+    ctx.beginPath(); ctx.moveTo(goSc[0],goSc[1]); ctx.lineTo(geSc[0],geSc[1]);
+    ctx.strokeStyle=gcol; ctx.lineWidth=2.5; ctx.lineCap='round'; ctx.stroke();
+    // Arrowhead
+    const ang=Math.atan2(geSc[1]-goSc[1],geSc[0]-goSc[0]);
+    ctx.beginPath();
+    ctx.moveTo(geSc[0],geSc[1]);
+    ctx.lineTo(geSc[0]-9*Math.cos(ang-0.42),geSc[1]-9*Math.sin(ang-0.42));
+    ctx.lineTo(geSc[0]-9*Math.cos(ang+0.42),geSc[1]-9*Math.sin(ang+0.42));
+    ctx.closePath(); ctx.fillStyle=gcol; ctx.fill();
+  }
 
-  ctx.beginPath(); ctx.arc(px, py, 11, 0, Math.PI*2);
-  ctx.fillStyle = col + '22'; ctx.fill();
-  ctx.beginPath(); ctx.arc(px, py, 7, 0, Math.PI*2);
-  ctx.fillStyle = col; ctx.fill();
-  ctx.beginPath(); ctx.arc(px, py, 3, 0, Math.PI*2);
-  ctx.fillStyle = '#fff'; ctx.fill();
+  // HUD overlay — top-left corner
+  ctx.textAlign='left'; ctx.textBaseline='top';
+  ctx.font='bold 11px monospace'; ctx.fillStyle=gcol;
+  ctx.fillText(`${gm.toFixed(2)} g`, 8, 8);
+  ctx.font='10px monospace'; ctx.fillStyle='#506080';
+  ctx.fillText(`R ${(S.roll[fi]||0).toFixed(1)}°  P ${(S.pitch[fi]||0).toFixed(1)}°`, 8, 22);
 
-  document.getElementById('gx-val').textContent   = ax.toFixed(2);
-  document.getElementById('gy-val').textContent   = ay.toFixed(2);
-  document.getElementById('gmag-val').textContent = gmag.toFixed(2);
-  document.getElementById('gmag-val').style.color = col;
+  // Update sublabel readouts
+  document.getElementById('gx-val').textContent    = ax.toFixed(2);
+  document.getElementById('gy-val').textContent    = ay.toFixed(2);
+  document.getElementById('gmag-val').textContent  = gm.toFixed(2);
+  document.getElementById('gmag-val').style.color  = gcol;
 }
 
 // ════════════════════════════════════════════════════════
@@ -776,11 +888,9 @@ function renderFrame(fi) {
   fi = Math.max(0, Math.min(S.meta.n_frames - 1, fi));
 
   const speed = S.spd[fi];
-  const ax = S.ax[fi], ay = S.ay[fi], az = S.az[fi];
-  const gmag = Math.sqrt(ax*ax + ay*ay + az*az);
 
   drawSpeedometer(speed);
-  drawGForce(ax, ay, gmag);
+  drawChaseCam(fi);
   drawMap(fi);
   drawStrip(speed);
 
@@ -838,7 +948,6 @@ function togglePlay() {
 function resetPlay() {
   playing = false; frameIdx = 0; lastWallTime = null;
   stripHead = 0; stripSpd.fill(0);
-  gTrailHead = 0; gTrailX.fill(0); gTrailY.fill(0);
   const btn = document.getElementById('btn-play');
   btn.textContent = '▶ PLAY'; btn.classList.remove('active');
   if (S) renderFrame(0);
