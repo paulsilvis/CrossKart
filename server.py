@@ -40,7 +40,7 @@ MPH  = 2.236936
 REQUIRED_COLS = [
     "t", "ax", "ay", "az", "gx", "gy", "gz",
     "lat", "lon", "spd", "hdg",
-    "roll", "pitch", "yaw", "qw", "qx", "qy", "qz",
+    "qw", "qx", "qy", "qz",
     "sat", "hdop", "marker",
 ]
 
@@ -55,6 +55,14 @@ _session_name: str        = ""
 
 
 # ── Session loading ────────────────────────────────────────────────────────────
+
+def _quat_to_euler_deg(qw, qx, qy, qz):
+    """ZYX quaternion arrays → (roll_deg, pitch_deg, yaw_deg) numpy arrays."""
+    roll  = np.degrees(np.arctan2(2*(qw*qx + qy*qz), 1 - 2*(qx**2 + qy**2)))
+    pitch = np.degrees(np.arcsin(np.clip(2*(qw*qy - qz*qx), -1.0, 1.0)))
+    yaw   = np.degrees(np.arctan2(2*(qw*qz + qx*qy), 1 - 2*(qy**2 + qz**2)))
+    return roll, pitch, yaw
+
 
 def _first_lap_end(x_m, y_m):
     """
@@ -89,7 +97,17 @@ def load_csv(path: str) -> tuple[str, str]:
     Parse a session CSV and return (json_string, display_name).
     Raises ValueError with a human-readable message on bad input.
     """
-    df = pd.read_csv(path, keep_default_na=False)
+    # Parse optional metadata comment on the first line (schema_version=N start_utc=...)
+    file_meta: dict[str, str] = {}
+    with open(path, 'r', encoding='utf-8', errors='replace') as fh:
+        first = fh.readline().strip()
+    if first.startswith('#'):
+        for token in first[1:].split():
+            if '=' in token:
+                k, v = token.split('=', 1)
+                file_meta[k] = v
+
+    df = pd.read_csv(path, comment='#', keep_default_na=False)
 
     missing = [c for c in REQUIRED_COLS if c not in df.columns]
     if missing:
@@ -122,6 +140,10 @@ def load_csv(path: str) -> tuple[str, str]:
     lap1_end = _first_lap_end(x_m, y_m)
     spd_mph = df["spd"].to_numpy() * MPH
     g_mag   = np.sqrt(df["ax"]**2 + df["ay"]**2 + df["az"]**2).to_numpy() / G0
+    roll, pitch, yaw = _quat_to_euler_deg(
+        df["qw"].to_numpy(), df["qx"].to_numpy(),
+        df["qy"].to_numpy(), df["qz"].to_numpy(),
+    )
 
     # Infer Hz
     diffs  = np.diff(df["t"].to_numpy()[:500])
@@ -145,17 +167,19 @@ def load_csv(path: str) -> tuple[str, str]:
 
     payload = {
         "meta": {
-            "name":       os.path.basename(path),
-            "duration":   float(df["t"].iloc[-1]),
-            "hz":         hz,
-            "n_frames":   len(df),
-            "origin_lat": origin_lat,
-            "origin_lon": origin_lon,
-            "top_mph":    round(float(spd_mph.max()), 1),
-            "peak_g":     round(float(g_mag.max()), 3),
-            "peak_yaw":   round(float(df["gz"].abs().max() * 57.296), 1),
-            "n_events":   len(markers),
-            "lap1_end":   lap1_end,
+            "name":           os.path.basename(path),
+            "schema_version": int(file_meta.get("schema_version", 1)),
+            "start_utc":      file_meta.get("start_utc", None),
+            "duration":       float(df["t"].iloc[-1]),
+            "hz":             hz,
+            "n_frames":       len(df),
+            "origin_lat":     origin_lat,
+            "origin_lon":     origin_lon,
+            "top_mph":        round(float(spd_mph.max()), 1),
+            "peak_g":         round(float(g_mag.max()), 3),
+            "peak_yaw":       round(float(df["gz"].abs().max() * 57.296), 1),
+            "n_events":       len(markers),
+            "lap1_end":       lap1_end,
         },
         "markers": markers,
         # Time-series channels (one value per frame)
@@ -163,9 +187,9 @@ def load_csv(path: str) -> tuple[str, str]:
         "spd":   f16(spd_mph),          # mph
         "g_mag": f16(g_mag),            # g
         "hdg":   f16(df["hdg"]),        # degrees
-        "roll":  f16(df["roll"]),       # degrees
-        "pitch": f16(df["pitch"]),      # degrees
-        "yaw":   f16(df["yaw"]),        # degrees
+        "roll":  f16(roll),             # degrees (derived from quaternions)
+        "pitch": f16(pitch),            # degrees (derived from quaternions)
+        "yaw":   f16(yaw),              # degrees (derived from quaternions)
         "gz":    f16(df["gz"] * 57.296),# yaw rate deg/s
         "ax":    f16(df["ax"] / G0),    # g (body frame)
         "ay":    f16(df["ay"] / G0),

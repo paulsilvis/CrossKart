@@ -38,7 +38,7 @@ import argparse
 import math
 import random
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Tuple
 
 import numpy as np
@@ -623,9 +623,6 @@ def generate(p: GenParams) -> pd.DataFrame:
         "lon":    gps_lon,
         "spd":    spd,
         "hdg":    hdg,
-        "roll":   roll_arr,
-        "pitch":  pitch_arr,
-        "yaw":    yaw_arr,
         "qw":     qw_arr,
         "qx":     qx_arr,
         "qy":     qy_arr,
@@ -668,8 +665,13 @@ def validate(df: pd.DataFrame, params: GenParams) -> bool:
     check("Peak vertical az (g)",       df.az.max() / G,             0, 12)
     check("Min vertical az (g)",        df.az.min() / G,            -3,  2)
     check("Peak yaw rate (deg/s)",      (df.gz.abs() * 57.3).max(), 0, 160)
-    check("Peak roll (deg)",            df.roll.abs().max(),          0,  14)
-    check("Peak pitch (deg)",           df.pitch.abs().max(),         0,  12)
+    # Derive roll/pitch from quaternions (no longer stored as columns)
+    qw, qx = df.qw.to_numpy(), df.qx.to_numpy()
+    qy, qz = df.qy.to_numpy(), df.qz.to_numpy()
+    roll_d  = np.degrees(np.arctan2(2*(qw*qx + qy*qz), 1 - 2*(qx**2 + qy**2)))
+    pitch_d = np.degrees(np.arcsin(np.clip(2*(qw*qy - qz*qx), -1.0, 1.0)))
+    check("Peak roll (deg)",            np.abs(roll_d).max(),         0,  14)
+    check("Peak pitch (deg)",           np.abs(pitch_d).max(),        0,  12)
 
     # Quaternion unit-norm check (sample 200 points)
     idxs = np.linspace(0, len(df)-1, 200, dtype=int)
@@ -733,7 +735,10 @@ def main() -> int:
     df = generate(params)
 
     out_path = args.out or f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-    df.to_csv(out_path, index=False)
+    start_utc = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    with open(out_path, 'w', newline='') as fh:
+        fh.write(f'# schema_version=2 start_utc={start_utc}\n')
+        df.to_csv(fh, index=False)
     print(f"Written: {out_path}  ({len(df)} rows, {len(df.columns)} columns)")
 
     if args.validate or not args.out:
