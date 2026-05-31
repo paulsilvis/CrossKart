@@ -1,0 +1,871 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cross-Kart Telemetry</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg0: #080b12;
+    --bg1: #0e1320;
+    --bg2: #141b2d;
+    --border: #1e2d44;
+    --text: #c8d8e8;
+    --muted: #4a6080;
+    --accent: #00c8f0;
+    --green: #00c97a;
+    --amber: #f0b429;
+    --red:   #e84040;
+    --panel-r: 10px;
+  }
+
+  body {
+    background: var(--bg0);
+    color: var(--text);
+    font-family: 'Courier New', monospace;
+    font-size: 13px;
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Top bar ── */
+  #topbar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 6px 14px;
+    background: var(--bg1);
+    border-bottom: 0.5px solid var(--border);
+    flex-shrink: 0;
+    flex-wrap: wrap;
+  }
+  #topbar .logo {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 2px;
+    white-space: nowrap;
+  }
+  #session-name {
+    color: var(--muted);
+    font-size: 11px;
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Stats row */
+  .stat { display: flex; flex-direction: column; align-items: center; min-width: 60px; }
+  .stat-val { font-size: 16px; font-weight: 700; color: var(--accent); line-height: 1; }
+  .stat-lbl { font-size: 9px; color: var(--muted); letter-spacing: 1px; margin-top: 1px; }
+
+  /* Controls */
+  .ctrl-btn {
+    background: var(--bg2);
+    border: 0.5px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 12px;
+    padding: 4px 12px;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .ctrl-btn:hover { background: var(--border); }
+  .ctrl-btn.active { background: var(--accent); color: #000; border-color: var(--accent); }
+
+  select.ctrl-btn { padding: 3px 6px; }
+
+  label { font-size: 10px; color: var(--muted); letter-spacing: 1px; }
+
+  /* ── Timeline ── */
+  #timeline-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 4px 14px;
+    background: var(--bg1);
+    border-bottom: 0.5px solid var(--border);
+    flex-shrink: 0;
+  }
+  #timeline {
+    flex: 1;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--bg2);
+    outline: none;
+    cursor: pointer;
+  }
+  #timeline::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+  }
+  #time-display { font-size: 12px; color: var(--accent); min-width: 52px; text-align: right; }
+
+  /* ── Main layout ── */
+  #main {
+    display: grid;
+    grid-template-columns: 1fr 260px 260px;
+    grid-template-rows: 1fr 90px;
+    gap: 8px;
+    padding: 8px;
+    flex: 1;
+    min-height: 0;
+  }
+
+  .panel {
+    background: var(--bg1);
+    border: 0.5px solid var(--border);
+    border-radius: var(--panel-r);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    position: relative;
+  }
+  .panel-label {
+    position: absolute;
+    top: 6px;
+    left: 10px;
+    font-size: 9px;
+    letter-spacing: 2px;
+    color: var(--muted);
+    text-transform: uppercase;
+  }
+
+  #map-panel   { grid-column: 1; grid-row: 1 / 3; }
+  #speed-panel { grid-column: 2; grid-row: 1; }
+  #gforce-panel{ grid-column: 3; grid-row: 1; }
+  #strip-panel {
+    grid-column: 2 / 4;
+    grid-row: 2;
+    flex-direction: row;
+    justify-content: space-between;
+    padding: 8px 14px;
+    gap: 12px;
+  }
+
+  canvas { display: block; }
+
+  /* Speed panel internals */
+  #speed-digital {
+    font-size: 32px;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 3px;
+    line-height: 1;
+    margin-top: 4px;
+  }
+  #speed-unit { font-size: 9px; color: var(--muted); letter-spacing: 2px; }
+
+  /* G-force sub-labels */
+  .g-sublabels {
+    display: flex;
+    gap: 20px;
+    margin-top: 4px;
+  }
+  .g-sub { text-align: center; }
+  .g-sub-val { font-size: 13px; font-weight: 600; color: var(--accent); }
+  .g-sub-lbl { font-size: 9px; color: var(--muted); letter-spacing: 1px; }
+
+  /* Strip panel */
+  .strip-stat { text-align: center; flex-shrink: 0; }
+  .strip-stat-val { font-size: 20px; font-weight: 700; color: var(--accent); line-height: 1; }
+  .strip-stat-lbl { font-size: 9px; color: var(--muted); letter-spacing: 1px; margin-top: 2px; }
+  #trail-canvas { flex: 1; border-radius: 4px; min-width: 0; }
+
+  /* ── Upload overlay ── */
+  #upload-overlay {
+    position: fixed; inset: 0;
+    background: rgba(8,11,18,0.92);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+  }
+  #upload-overlay.hidden { display: none; }
+  .upload-box {
+    background: var(--bg1);
+    border: 1px dashed var(--border);
+    border-radius: 14px;
+    padding: 48px 64px;
+    text-align: center;
+    cursor: pointer;
+  }
+  .upload-box h2 { color: var(--accent); margin-bottom: 10px; font-size: 18px; }
+  .upload-box p  { color: var(--muted); font-size: 12px; }
+  #file-input { display: none; }
+
+  /* ── Marker badge ── */
+  #marker-badge {
+    position: absolute;
+    top: 36px; left: 10px;
+    background: rgba(255,215,0,0.15);
+    border: 0.5px solid #FFD700;
+    border-radius: 6px;
+    padding: 3px 8px;
+    font-size: 10px;
+    color: #FFD700;
+    display: none;
+  }
+</style>
+</head>
+<body>
+
+<!-- Upload overlay -->
+<div id="upload-overlay">
+  <div class="upload-box" id="drop-zone">
+    <h2>🏁 CROSS-KART TELEMETRY</h2>
+    <p style="margin-bottom:24px">Drop a session CSV here, or click to browse</p>
+    <button class="ctrl-btn" onclick="document.getElementById('file-input').click()">Choose File</button>
+    <input type="file" id="file-input" accept=".csv">
+    <p id="upload-status" style="margin-top:14px;color:var(--amber)"></p>
+  </div>
+</div>
+
+<!-- Top bar -->
+<div id="topbar">
+  <div class="logo">◈ CROSSKART</div>
+  <div id="session-name">no session</div>
+
+  <div class="stat"><div class="stat-val" id="stat-top">—</div><div class="stat-lbl">TOP MPH</div></div>
+  <div class="stat"><div class="stat-val" id="stat-g">—</div><div class="stat-lbl">PEAK G</div></div>
+  <div class="stat"><div class="stat-val" id="stat-yaw">—</div><div class="stat-lbl">PEAK YAW°/s</div></div>
+  <div class="stat"><div class="stat-val" id="stat-ev">—</div><div class="stat-lbl">EVENTS</div></div>
+
+  <div style="display:flex;gap:6px;align-items:center;margin-left:auto">
+    <button class="ctrl-btn" id="btn-play" onclick="togglePlay()">▶ PLAY</button>
+    <button class="ctrl-btn" onclick="resetPlay()">⏹</button>
+    <label>SPEED</label>
+    <select class="ctrl-btn" id="spd-sel">
+      <option value="0.25">¼×</option>
+      <option value="0.5">½×</option>
+      <option value="1" selected>1×</option>
+      <option value="2">2×</option>
+      <option value="4">4×</option>
+    </select>
+    <button class="ctrl-btn" onclick="document.getElementById('file-input').click()">📂</button>
+  </div>
+</div>
+
+<!-- Timeline -->
+<div id="timeline-row">
+  <input type="range" id="timeline" min="0" max="1000" value="0" step="1">
+  <div id="time-display">0:00.0</div>
+</div>
+
+<!-- Main panels -->
+<div id="main">
+  <div class="panel" id="map-panel">
+    <div class="panel-label">TRACK MAP</div>
+    <div id="marker-badge"></div>
+    <canvas id="map-canvas"></canvas>
+  </div>
+
+  <div class="panel" id="speed-panel">
+    <div class="panel-label">SPEED</div>
+    <canvas id="speed-canvas" width="220" height="220"></canvas>
+    <div id="speed-digital">0</div>
+    <div id="speed-unit">MPH</div>
+  </div>
+
+  <div class="panel" id="gforce-panel">
+    <div class="panel-label">G-FORCE</div>
+    <canvas id="gforce-canvas" width="200" height="200"></canvas>
+    <div class="g-sublabels">
+      <div class="g-sub"><div class="g-sub-val" id="gx-val">0.00</div><div class="g-sub-lbl">LAT-G</div></div>
+      <div class="g-sub"><div class="g-sub-val" id="gy-val">0.00</div><div class="g-sub-lbl">LON-G</div></div>
+      <div class="g-sub"><div class="g-sub-val" id="gmag-val">0.00</div><div class="g-sub-lbl">|G|</div></div>
+    </div>
+  </div>
+
+  <div class="panel" id="strip-panel">
+    <div class="strip-stat">
+      <div class="strip-stat-val" id="strip-spd">0</div>
+      <div class="strip-stat-lbl">MPH NOW</div>
+    </div>
+    <canvas id="trail-canvas" height="70"></canvas>
+    <div class="strip-stat">
+      <div class="strip-stat-val" id="strip-hdg">000°</div>
+      <div class="strip-stat-lbl">HEADING</div>
+    </div>
+    <div class="strip-stat">
+      <div class="strip-stat-val" id="strip-roll">0°</div>
+      <div class="strip-stat-lbl">ROLL</div>
+    </div>
+    <div class="strip-stat">
+      <div class="strip-stat-val" id="strip-pitch">0°</div>
+      <div class="strip-stat-lbl">PITCH</div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ════════════════════════════════════════════════════════
+//  State
+// ════════════════════════════════════════════════════════
+let S = null;          // session data object
+let frameIdx = 0;      // current frame index
+let playing = false;
+let lastRaf = null;
+let lastWallTime = null;
+const TRAIL_LEN = 150; // frames of speed-trail history
+
+// Map geometry (computed once after session load)
+let mapScale = 1, mapOffX = 0, mapOffY = 0;
+let mapW = 0, mapH = 0;
+let kartSz = 0;        // kart marker size in px
+
+// Pre-built map path (ImageBitmap for GPU blitting)
+let mapPathCache = null;
+
+// Speed trail ring buffer
+const trailX = new Float32Array(TRAIL_LEN);
+const trailY = new Float32Array(TRAIL_LEN);
+const trailS = new Float32Array(TRAIL_LEN);
+let trailHead = 0;
+
+// Speed history for strip chart
+const STRIP_LEN = 200;
+const stripSpd = new Float32Array(STRIP_LEN);
+let stripHead = 0;
+
+// ════════════════════════════════════════════════════════
+//  Upload / session load
+// ════════════════════════════════════════════════════════
+const overlay  = document.getElementById('upload-overlay');
+const fileInput = document.getElementById('file-input');
+const dropZone  = document.getElementById('drop-zone');
+const uploadStatus = document.getElementById('upload-status');
+
+fileInput.addEventListener('change', e => uploadFile(e.target.files[0]));
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.style.borderColor='var(--accent)'; });
+dropZone.addEventListener('dragleave', ()=> { dropZone.style.borderColor='var(--border)'; });
+dropZone.addEventListener('drop', e => { e.preventDefault(); uploadFile(e.dataTransfer.files[0]); });
+
+async function uploadFile(file) {
+  if (!file) return;
+  uploadStatus.textContent = 'Uploading…';
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const r = await fetch('/api/upload', { method: 'POST', body: fd });
+    if (!r.ok) { uploadStatus.textContent = await r.text(); return; }
+    uploadStatus.textContent = 'Loading session…';
+    await loadSession();
+  } catch(e) {
+    uploadStatus.textContent = 'Error: ' + e.message;
+  }
+}
+
+async function loadSession() {
+  const r = await fetch('/api/session');
+  if (!r.ok) return;
+  S = await r.json();
+  onSessionLoaded();
+}
+
+function onSessionLoaded() {
+  const m = S.meta;
+  document.getElementById('session-name').textContent = m.name;
+  document.getElementById('stat-top').textContent  = m.top_mph.toFixed(1);
+  document.getElementById('stat-g').textContent    = m.peak_g.toFixed(2);
+  document.getElementById('stat-yaw').textContent  = m.peak_yaw.toFixed(0);
+  document.getElementById('stat-ev').textContent   = m.n_events;
+  document.getElementById('timeline').max = m.n_frames - 1;
+
+  frameIdx = 0;
+  trailHead = 0; stripHead = 0;
+  playing = false;
+  document.getElementById('btn-play').textContent = '▶ PLAY';
+  document.getElementById('btn-play').classList.remove('active');
+
+  buildMapGeometry();
+  renderMapPath();       // draw static path once into offscreen canvas
+  overlay.classList.add('hidden');
+  requestAnimationFrame(animLoop);
+}
+
+// Try loading server-preloaded session on startup
+(async () => {
+  try {
+    const r = await fetch('/api/session');
+    if (r.ok) { S = await r.json(); onSessionLoaded(); return; }
+  } catch(_) {}
+  // Show upload overlay
+})();
+
+// ════════════════════════════════════════════════════════
+//  Map geometry
+// ════════════════════════════════════════════════════════
+function buildMapGeometry() {
+  const mapCanvas = document.getElementById('map-canvas');
+  const panel = document.getElementById('map-panel');
+  mapW = panel.clientWidth;
+  mapH = panel.clientHeight;
+  mapCanvas.width  = mapW;
+  mapCanvas.height = mapH;
+
+  const xs = S.x_m, ys = S.y_m;
+  let minX=Infinity, maxX=-Infinity, minY=Infinity, maxY=-Infinity;
+  for (let i=0; i<xs.length; i++) {
+    if (xs[i] < minX) minX=xs[i]; if (xs[i] > maxX) maxX=xs[i];
+    if (ys[i] < minY) minY=ys[i]; if (ys[i] > maxY) maxY=ys[i];
+  }
+  const pad = 30;
+  const sx = (mapW - pad*2) / (maxX - minX || 1);
+  const sy = (mapH - pad*2) / (maxY - minY || 1);
+  mapScale = Math.min(sx, sy) * 0.92;
+  mapOffX  = pad + ((mapW - pad*2) - (maxX - minX) * mapScale) / 2 - minX * mapScale;
+  mapOffY  = mapH - pad - ((mapH - pad*2) - (maxY - minY) * mapScale) / 2 + minY * mapScale;
+
+  const trackSpan = Math.min(maxX - minX, maxY - minY) * mapScale;
+  kartSz = Math.max(8, trackSpan * 0.035);
+}
+
+function toMap(xm, ym) {
+  return [xm * mapScale + mapOffX, mapH - (ym * mapScale + (mapH - mapOffY))];
+}
+
+// Draw static track path to an offscreen canvas, cache it
+function renderMapPath() {
+  const off = document.createElement('canvas');
+  off.width = mapW; off.height = mapH;
+  const ctx = off.getContext('2d');
+
+  ctx.clearRect(0, 0, mapW, mapH);
+
+  // Dim full path
+  ctx.beginPath();
+  const xs = S.x_m, ys = S.y_m;
+  const [px0, py0] = toMap(xs[0], ys[0]);
+  ctx.moveTo(px0, py0);
+  for (let i=1; i<xs.length; i++) {
+    const [px, py] = toMap(xs[i], ys[i]);
+    ctx.lineTo(px, py);
+  }
+  ctx.strokeStyle = '#1a2545';
+  ctx.lineWidth = 2.5;
+  ctx.lineJoin = 'round';
+  ctx.stroke();
+
+  // Marker triangles
+  for (const mk of S.markers) {
+    const [px, py] = toMap(xs[mk.idx], ys[mk.idx]);
+    ctx.beginPath();
+    ctx.moveTo(px, py - 9);
+    ctx.lineTo(px - 5, py + 2);
+    ctx.lineTo(px + 5, py + 2);
+    ctx.closePath();
+    ctx.fillStyle = '#FFD700';
+    ctx.fill();
+  }
+
+  mapPathCache = off;  // keep as canvas; we'll drawImage it
+}
+
+// ════════════════════════════════════════════════════════
+//  Colour helpers
+// ════════════════════════════════════════════════════════
+function spdColor(mph, maxMph) {
+  const t = Math.min(1, mph / (maxMph || 1));
+  if (t < 0.5) {
+    const r = Math.round(255 * t * 2);
+    return `rgb(${r},200,0)`;
+  } else {
+    const g = Math.round(200 * (1 - (t - 0.5) * 2));
+    return `rgb(255,${g},0)`;
+  }
+}
+
+function gColor(g) {
+  if (g < 0.8) return '#00c97a';
+  if (g < 1.8) return '#f0b429';
+  return '#e84040';
+}
+
+// ════════════════════════════════════════════════════════
+//  Speedometer
+// ════════════════════════════════════════════════════════
+function drawSpeedometer(speed) {
+  const canvas = document.getElementById('speed-canvas');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const cx = W/2, cy = H/2 + 8, r = W * 0.42;
+  ctx.clearRect(0, 0, W, H);
+
+  const startA = Math.PI * 0.75, endA = Math.PI * 2.25, range = endA - startA;
+  const maxMph = S.meta.top_mph > 30 ? Math.ceil(S.meta.top_mph / 10) * 10 : 40;
+  const frac = Math.min(1, speed / maxMph);
+
+  // Background arc
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, startA, endA);
+  ctx.strokeStyle = '#141b2d';
+  ctx.lineWidth = 12;
+  ctx.lineCap = 'round';
+  ctx.stroke();
+
+  // Zone arcs
+  const zones = [[0.5,'#00c97a33'],[0.75,'#f0b42933'],[1.0,'#e8404033']];
+  let za = startA;
+  for (const [end, col] of zones) {
+    const ze = startA + range * end;
+    ctx.beginPath(); ctx.arc(cx, cy, r, za, ze);
+    ctx.strokeStyle = col; ctx.lineWidth = 12; ctx.stroke();
+    za = ze;
+  }
+
+  // Active arc
+  if (frac > 0) {
+    const col = frac < 0.5 ? '#00c97a' : frac < 0.75 ? '#f0b429' : '#e84040';
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, startA, startA + range * frac);
+    ctx.strokeStyle = col; ctx.lineWidth = 12; ctx.lineCap = 'round';
+    ctx.stroke();
+  }
+
+  // Ticks + labels
+  for (let i = 0; i <= 10; i++) {
+    const a = startA + range * (i / 10);
+    const major = i % 2 === 0;
+    const ir = major ? r - 20 : r - 13;
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(a) * ir, cy + Math.sin(a) * ir);
+    ctx.lineTo(cx + Math.cos(a) * (r - 3), cy + Math.sin(a) * (r - 3));
+    ctx.strokeStyle = major ? '#3a5070' : '#1e2d44';
+    ctx.lineWidth = major ? 1.5 : 0.75;
+    ctx.stroke();
+    if (major) {
+      const lr = r - 30;
+      ctx.fillStyle = '#3a5070';
+      ctx.font = '10px monospace';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(Math.round(maxMph * i / 10), cx + Math.cos(a)*lr, cy + Math.sin(a)*lr);
+    }
+  }
+
+  // Needle
+  const na = startA + range * frac;
+  ctx.save(); ctx.translate(cx, cy); ctx.rotate(na);
+  ctx.beginPath(); ctx.moveTo(-10, 0); ctx.lineTo(r - 18, 0);
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(-10, 0); ctx.lineTo(-16, 0);
+  ctx.strokeStyle = '#e84040'; ctx.lineWidth = 3; ctx.stroke();
+  ctx.restore();
+
+  // Cap
+  ctx.beginPath(); ctx.arc(cx, cy, 7, 0, Math.PI*2);
+  ctx.fillStyle = '#fff'; ctx.fill();
+  ctx.beginPath(); ctx.arc(cx, cy, 3.5, 0, Math.PI*2);
+  ctx.fillStyle = '#0e1320'; ctx.fill();
+
+  document.getElementById('speed-digital').textContent = Math.round(speed);
+}
+
+// ════════════════════════════════════════════════════════
+//  G-Force meter
+// ════════════════════════════════════════════════════════
+const G_TRAIL = 30;
+const gTrailX = new Float32Array(G_TRAIL);
+const gTrailY = new Float32Array(G_TRAIL);
+let gTrailHead = 0;
+
+function drawGForce(ax, ay, gmag) {
+  const canvas = document.getElementById('gforce-canvas');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const cx = W/2, cy = H/2 + 4, r = W * 0.40;
+  const maxG = 2.5;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // Grid rings
+  ctx.setLineDash([]);
+  for (const g of [2.5, 1.5, 0.75]) {
+    const gr = r * (g / maxG);
+    ctx.beginPath(); ctx.arc(cx, cy, gr, 0, Math.PI*2);
+    ctx.strokeStyle = g === 2.5 ? '#1e2d44' : '#141b2d';
+    ctx.lineWidth = g === 2.5 ? 1 : 0.75;
+    ctx.stroke();
+  }
+
+  // Crosshairs
+  ctx.strokeStyle = '#141b2d'; ctx.lineWidth = 0.75;
+  ctx.beginPath(); ctx.moveTo(cx - r, cy); ctx.lineTo(cx + r, cy); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx, cy - r); ctx.lineTo(cx, cy + r); ctx.stroke();
+
+  // Cardinal labels
+  ctx.fillStyle = '#1e3050'; ctx.font = '9px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('F', cx, cy - r + 8);
+  ctx.fillText('B', cx, cy + r - 8);
+  ctx.fillText('L', cx - r + 8, cy);
+  ctx.fillText('R', cx + r - 8, cy);
+
+  // G-ring labels
+  ctx.fillStyle = '#1e3050'; ctx.font = '8px monospace';
+  ctx.fillText('1g', cx + r*0.6 + 8, cy - 5);
+
+  // Ghost trail
+  gTrailX[gTrailHead % G_TRAIL] = ax;
+  gTrailY[gTrailHead % G_TRAIL] = ay;
+  gTrailHead++;
+  for (let i = 0; i < G_TRAIL; i++) {
+    const ti = (gTrailHead - G_TRAIL + i + G_TRAIL) % G_TRAIL;
+    const px = cx + (gTrailX[ti] / maxG) * r;
+    const py = cy - (gTrailY[ti] / maxG) * r;
+    const alpha = i / G_TRAIL * 0.25;
+    ctx.beginPath(); ctx.arc(px, py, 4, 0, Math.PI*2);
+    ctx.fillStyle = `rgba(0,200,120,${alpha})`; ctx.fill();
+  }
+
+  // G dot
+  const px = cx + (ax / maxG) * r;
+  const py = cy - (ay / maxG) * r;
+  const col = gColor(gmag);
+
+  ctx.beginPath(); ctx.arc(px, py, 11, 0, Math.PI*2);
+  ctx.fillStyle = col + '22'; ctx.fill();
+  ctx.beginPath(); ctx.arc(px, py, 7, 0, Math.PI*2);
+  ctx.fillStyle = col; ctx.fill();
+  ctx.beginPath(); ctx.arc(px, py, 3, 0, Math.PI*2);
+  ctx.fillStyle = '#fff'; ctx.fill();
+
+  document.getElementById('gx-val').textContent   = ax.toFixed(2);
+  document.getElementById('gy-val').textContent   = ay.toFixed(2);
+  document.getElementById('gmag-val').textContent = gmag.toFixed(2);
+  document.getElementById('gmag-val').style.color = col;
+}
+
+// ════════════════════════════════════════════════════════
+//  Track map frame
+// ════════════════════════════════════════════════════════
+function drawMap(fi) {
+  const canvas = document.getElementById('map-canvas');
+  const ctx = canvas.getContext('2d');
+
+  // Blit cached static path
+  ctx.clearRect(0, 0, mapW, mapH);
+  if (mapPathCache) ctx.drawImage(mapPathCache, 0, 0);
+
+  // Speed-coloured trail
+  const tailLen = Math.min(TRAIL_LEN, fi + 1);
+  const t0 = Math.max(0, fi - tailLen + 1);
+  if (fi > t0) {
+    for (let i = t0; i < fi; i++) {
+      const [x1, y1] = toMap(S.x_m[i],   S.y_m[i]);
+      const [x2, y2] = toMap(S.x_m[i+1], S.y_m[i+1]);
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
+      ctx.strokeStyle = spdColor(S.spd[i], S.meta.top_mph);
+      ctx.lineWidth = 5; ctx.lineCap = 'round'; ctx.stroke();
+    }
+  }
+
+  // Kart marker
+  const xk = S.x_m[fi], yk = S.y_m[fi];
+  const [px, py] = toMap(xk, yk);
+  const hdgRad = ((90 - S.hdg[fi]) * Math.PI / 180);
+  const sz = kartSz;
+  const col = spdColor(S.spd[fi], S.meta.top_mph);
+
+  ctx.save(); ctx.translate(px, py); ctx.rotate(-hdgRad);
+
+  // Glow
+  ctx.beginPath(); ctx.arc(0, 0, sz * 0.8, 0, Math.PI*2);
+  ctx.fillStyle = col + '18'; ctx.fill();
+
+  // Body
+  ctx.beginPath();
+  ctx.moveTo( sz*0.55,  0);
+  ctx.lineTo( sz*0.40,  sz*0.20);
+  ctx.lineTo( sz*0.15,  sz*0.28);
+  ctx.lineTo(-sz*0.35,  sz*0.28);
+  ctx.lineTo(-sz*0.55,  sz*0.20);
+  ctx.lineTo(-sz*0.55, -sz*0.20);
+  ctx.lineTo(-sz*0.35, -sz*0.28);
+  ctx.lineTo( sz*0.15, -sz*0.28);
+  ctx.lineTo( sz*0.40, -sz*0.20);
+  ctx.closePath();
+  ctx.fillStyle = col; ctx.strokeStyle = '#ffffffcc'; ctx.lineWidth = 1.2;
+  ctx.fill(); ctx.stroke();
+
+  // Roll bar
+  ctx.fillStyle = '#2a2a2acc';
+  ctx.fillRect(-sz*0.32, -sz*0.24, sz*0.18, sz*0.48);
+
+  // Wheels (4)
+  const ww = sz*0.20, wh = sz*0.10;
+  ctx.fillStyle = '#111';
+  ctx.strokeStyle = '#bbb'; ctx.lineWidth = 0.8;
+  for (const [wx, wy] of [[sz*0.32, sz*0.30],[sz*0.32,-sz*0.30],[-sz*0.32,sz*0.30],[-sz*0.32,-sz*0.30]]) {
+    ctx.beginPath();
+    ctx.rect(wx - ww/2, wy - wh/2, ww, wh);
+    ctx.fill(); ctx.stroke();
+  }
+
+  // Nose dot
+  ctx.beginPath(); ctx.arc(sz*0.60, 0, sz*0.09, 0, Math.PI*2);
+  ctx.fillStyle = '#FFD700'; ctx.fill();
+
+  ctx.restore();
+
+  // Active marker badge
+  const badge = document.getElementById('marker-badge');
+  const cur = S.markers.find(mk => Math.abs(mk.idx - fi) < 5);
+  if (cur) { badge.textContent = '🚩 ' + cur.label; badge.style.display='block'; }
+  else      { badge.style.display = 'none'; }
+}
+
+// ════════════════════════════════════════════════════════
+//  Speed strip chart
+// ════════════════════════════════════════════════════════
+function drawStrip(speed) {
+  stripSpd[stripHead % STRIP_LEN] = speed;
+  stripHead++;
+
+  const canvas = document.getElementById('trail-canvas');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  if (!W || !H) return;
+
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#0d1420';
+  ctx.fillRect(0, 0, W, H);
+
+  const maxS = S.meta.top_mph || 40;
+
+  // Grid lines
+  ctx.strokeStyle = '#141b2d'; ctx.lineWidth = 0.5; ctx.setLineDash([]);
+  for (const s of [10, 20, 30, 40, 50]) {
+    const y = H - 2 - (s / maxS) * (H - 4);
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+
+  // Curve
+  ctx.beginPath();
+  for (let i = 0; i < STRIP_LEN; i++) {
+    const si = (stripHead - STRIP_LEN + i + STRIP_LEN) % STRIP_LEN;
+    const x = (i / (STRIP_LEN - 1)) * W;
+    const y = H - 2 - (Math.min(stripSpd[si], maxS) / maxS) * (H - 4);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  }
+  ctx.strokeStyle = '#00c97a'; ctx.lineWidth = 1.5; ctx.stroke();
+
+  // Fill
+  ctx.lineTo(W, H); ctx.lineTo(0, H); ctx.closePath();
+  ctx.fillStyle = '#00c97a18'; ctx.fill();
+}
+
+// ════════════════════════════════════════════════════════
+//  Main render call (one frame)
+// ════════════════════════════════════════════════════════
+function renderFrame(fi) {
+  if (!S) return;
+  fi = Math.max(0, Math.min(S.meta.n_frames - 1, fi));
+
+  const speed = S.spd[fi];
+  const ax = S.ax[fi], ay = S.ay[fi], az = S.az[fi];
+  const gmag = Math.sqrt(ax*ax + ay*ay + az*az);
+
+  drawSpeedometer(speed);
+  drawGForce(ax, ay, gmag);
+  drawMap(fi);
+  drawStrip(speed);
+
+  // Strip stats
+  document.getElementById('strip-spd').textContent   = Math.round(speed);
+  document.getElementById('strip-hdg').textContent   = Math.round(S.hdg[fi]) + '°';
+  document.getElementById('strip-roll').textContent  = Math.round(S.roll[fi]) + '°';
+  document.getElementById('strip-pitch').textContent = Math.round(S.pitch[fi]) + '°';
+
+  // Timeline + time display
+  document.getElementById('timeline').value = fi;
+  const tsec = S.t[fi];
+  const m = Math.floor(tsec / 60);
+  const s = (tsec % 60).toFixed(1).padStart(4, '0');
+  document.getElementById('time-display').textContent = `${m}:${s}`;
+}
+
+// ════════════════════════════════════════════════════════
+//  Animation loop
+// ════════════════════════════════════════════════════════
+function animLoop(now) {
+  lastRaf = requestAnimationFrame(animLoop);
+  if (!S) return;
+
+  if (playing) {
+    if (lastWallTime === null) lastWallTime = now;
+    const dt = (now - lastWallTime) / 1000;  // seconds
+    lastWallTime = now;
+    const playSpeed = parseFloat(document.getElementById('spd-sel').value);
+    const simDt = dt * playSpeed;
+    const dFrames = Math.round(simDt * S.meta.hz);
+    frameIdx = Math.min(S.meta.n_frames - 1, frameIdx + Math.max(1, dFrames));
+    if (frameIdx >= S.meta.n_frames - 1) {
+      playing = false;
+      document.getElementById('btn-play').textContent = '▶ PLAY';
+      document.getElementById('btn-play').classList.remove('active');
+    }
+  }
+
+  renderFrame(frameIdx);
+}
+
+// ════════════════════════════════════════════════════════
+//  Controls
+// ════════════════════════════════════════════════════════
+function togglePlay() {
+  if (!S) return;
+  playing = !playing;
+  lastWallTime = null;
+  const btn = document.getElementById('btn-play');
+  btn.textContent = playing ? '⏸ PAUSE' : '▶ PLAY';
+  btn.classList.toggle('active', playing);
+}
+
+function resetPlay() {
+  playing = false; frameIdx = 0; lastWallTime = null;
+  stripHead = 0; stripSpd.fill(0);
+  gTrailHead = 0; gTrailX.fill(0); gTrailY.fill(0);
+  const btn = document.getElementById('btn-play');
+  btn.textContent = '▶ PLAY'; btn.classList.remove('active');
+  if (S) renderFrame(0);
+}
+
+// Timeline scrub (only when not playing)
+document.getElementById('timeline').addEventListener('input', e => {
+  if (!S || playing) return;
+  frameIdx = parseInt(e.target.value);
+  lastWallTime = null;
+  renderFrame(frameIdx);
+});
+
+// Keyboard shortcuts
+document.addEventListener('keydown', e => {
+  if (!S) return;
+  if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
+  if (e.code === 'ArrowRight') { playing = false; frameIdx = Math.min(S.meta.n_frames-1, frameIdx+10); renderFrame(frameIdx); }
+  if (e.code === 'ArrowLeft')  { playing = false; frameIdx = Math.max(0, frameIdx-10); renderFrame(frameIdx); }
+  if (e.code === 'Home') resetPlay();
+});
+
+// Resize map canvas on window resize
+window.addEventListener('resize', () => {
+  if (!S) return;
+  buildMapGeometry();
+  renderMapPath();
+});
+</script>
+</body>
+</html>

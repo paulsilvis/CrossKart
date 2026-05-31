@@ -1,13 +1,12 @@
 """
-Cross-Kart Telemetry Viewer — Windows launcher
+Cross-Kart Telemetry Viewer — launcher  (launch.pyw)
 
-Double-click this file to start the viewer.
-- First run: creates a virtual environment and installs dependencies (~1-2 min).
-- After that: opens the viewer in your browser immediately.
-- A tray icon appears in the taskbar — right-click it to reopen or stop the viewer.
+Double-click to start the viewer on Windows.
+- First run: creates venv and installs dependencies (~1-2 min).
+- Subsequent runs: opens browser immediately.
+- System tray icon: right-click to reopen or stop.
 
-Requires Python 3.10+ installed from https://www.python.org/downloads/
-(check "Add Python to PATH" during install).
+Requires Python 3.10+ with "Add Python to PATH" checked.
 """
 
 import os
@@ -18,110 +17,112 @@ import tkinter as tk
 import webbrowser
 from tkinter import messagebox
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-VENV = os.path.join(HERE, ".venv")
-STREAMLIT = os.path.join(VENV, "Scripts", "streamlit.exe")
-PIP = os.path.join(VENV, "Scripts", "pip.exe")
+HERE        = os.path.dirname(os.path.abspath(__file__))
+VENV        = os.path.join(HERE, ".venv")
+DATA_DIR    = os.path.join(HERE, "data")
+SERVER      = os.path.join(HERE, "server.py")
 REQUIREMENTS = os.path.join(HERE, "requirements.txt")
-VIEWER = os.path.join(HERE, "viewer", "view_session.py")
+PORT        = 5000
+URL         = f"http://127.0.0.1:{PORT}"
 
-NO_WINDOW = 0x08000000  # Windows: suppress console window for subprocesses
+# Scripts dir differs between Windows and Unix
+if sys.platform == "win32":
+    PYTHON_VENV = os.path.join(VENV, "Scripts", "python.exe")
+    PIP_VENV    = os.path.join(VENV, "Scripts", "pip.exe")
+else:
+    PYTHON_VENV = os.path.join(VENV, "bin", "python")
+    PIP_VENV    = os.path.join(VENV, "bin", "pip")
 
-# sys.executable under pythonw.exe is pythonw.exe, which can't run venv/pip.
-# Swap in python.exe from the same directory for setup work.
+NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+
 PYTHON = sys.executable.replace("pythonw.exe", "python.exe")
 if not os.path.exists(PYTHON):
     PYTHON = sys.executable
 
 
 def die(msg):
-    root = tk.Tk()
-    root.withdraw()
-    messagebox.showerror("Cross-Kart launcher error", msg)
+    root = tk.Tk(); root.withdraw()
+    messagebox.showerror("Cross-Kart launcher", msg)
     sys.exit(1)
 
 
-def run(cmd, **kwargs):
-    kwargs.setdefault("creationflags", NO_WINDOW)
-    kwargs.setdefault("stdout", subprocess.PIPE)
-    kwargs.setdefault("stderr", subprocess.PIPE)
-    result = subprocess.run(cmd, **kwargs)
+def run(cmd, **kw):
+    kw.setdefault("stdout", subprocess.PIPE)
+    kw.setdefault("stderr", subprocess.PIPE)
+    if sys.platform == "win32":
+        kw.setdefault("creationflags", NO_WINDOW)
+    result = subprocess.run(cmd, **kw)
     if result.returncode != 0:
         detail = result.stderr.decode(errors="replace").strip() if result.stderr else ""
-        die(
-            f"Setup step failed (exit {result.returncode}):\n\n"
-            + " ".join(str(c) for c in cmd)
-            + (f"\n\n{detail}" if detail else "")
-            + "\n\nCheck that Python is installed and try again."
-        )
+        die(f"Setup failed:\n{' '.join(str(c) for c in cmd)}\n\n{detail}")
 
 
-def first_run_notice():
-    root = tk.Tk()
-    root.withdraw()
+# ── First-run setup ────────────────────────────────────────────────────────────
+if not os.path.exists(PYTHON_VENV):
+    root = tk.Tk(); root.withdraw()
     messagebox.showinfo(
         "Cross-Kart — first-time setup",
-        "Setting up for the first time.\n\n"
-        "This will take about a minute. The viewer will open automatically when ready.",
+        "Setting up for the first time.\nThis takes about a minute.",
     )
     root.destroy()
-
-
-def make_icon():
-    """Checkered flag icon for the system tray."""
-    from PIL import Image, ImageDraw
-    size = 64
-    img = Image.new("RGB", (size, size), (15, 15, 26))
-    draw = ImageDraw.Draw(img)
-    sq = size // 4
-    for row in range(4):
-        for col in range(4):
-            color = (240, 240, 240) if (row + col) % 2 == 0 else (30, 30, 30)
-            draw.rectangle(
-                [col * sq, row * sq, (col + 1) * sq - 1, (row + 1) * sq - 1],
-                fill=color,
-            )
-    return img
-
-
-# ── First-run setup ───────────────────────────────────────────────────────────
-
-if not os.path.exists(STREAMLIT):
-    first_run_notice()
     run([PYTHON, "-m", "venv", VENV])
-    run([PIP, "install", "--quiet", "-r", REQUIREMENTS])
+    run([PIP_VENV, "install", "--quiet", "-r", REQUIREMENTS])
 
-# ── Launch Streamlit ──────────────────────────────────────────────────────────
+# ── Find a default session to preload (newest CSV in data/) ───────────────────
+default_session = ""
+if os.path.isdir(DATA_DIR):
+    csvs = sorted(
+        (os.path.join(DATA_DIR, f) for f in os.listdir(DATA_DIR) if f.endswith(".csv")),
+        key=os.path.getmtime, reverse=True,
+    )
+    if csvs:
+        default_session = csvs[0]
+
+# ── Launch Flask server ───────────────────────────────────────────────────────
+cmd = [PYTHON_VENV, SERVER, "--port", str(PORT)]
+if default_session:
+    cmd.append(default_session)
 
 proc = subprocess.Popen(
-    [STREAMLIT, "run", VIEWER, "--server.headless", "false"],
-    creationflags=NO_WINDOW,
+    cmd,
     cwd=HERE,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    creationflags=NO_WINDOW if sys.platform == "win32" else 0,
 )
 
-time.sleep(4)
-webbrowser.open("http://localhost:8501")
+# Wait for server to be ready (poll the port)
+import socket
+for _ in range(40):
+    time.sleep(0.25)
+    try:
+        with socket.create_connection(("127.0.0.1", PORT), timeout=0.2):
+            break
+    except OSError:
+        pass
 
-# ── System tray icon ──────────────────────────────────────────────────────────
-# icon.run() blocks here, keeping the launcher alive while Streamlit runs.
-# Stopping from the tray terminates Streamlit and exits cleanly.
+webbrowser.open(URL)
 
+# ── System tray ───────────────────────────────────────────────────────────────
+from PIL import Image, ImageDraw
 import pystray
 
+def make_icon():
+    img = Image.new("RGB", (64, 64), (8, 11, 18))
+    d = ImageDraw.Draw(img)
+    sq = 16
+    for row in range(4):
+        for col in range(4):
+            c = (230, 230, 230) if (row + col) % 2 == 0 else (30, 30, 30)
+            d.rectangle([col*sq, row*sq, (col+1)*sq-1, (row+1)*sq-1], fill=c)
+    return img
 
-def open_viewer(icon, item):
-    webbrowser.open("http://localhost:8501")
-
-
-def stop_viewer(icon, item):
-    proc.terminate()
-    icon.stop()
-
+def open_viewer(icon, item): webbrowser.open(URL)
+def stop_viewer(icon, item): proc.terminate(); icon.stop()
 
 tray = pystray.Icon(
-    "CrossKart",
-    make_icon(),
-    "Cross-Kart Viewer  (right-click to stop)",
+    "CrossKart", make_icon(),
+    "Cross-Kart Telemetry  (right-click to stop)",
     menu=pystray.Menu(
         pystray.MenuItem("Open Viewer", open_viewer, default=True),
         pystray.MenuItem("Stop", stop_viewer),

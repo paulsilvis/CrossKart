@@ -14,6 +14,7 @@ This is a fun engineering project. It should stay that way.
 
 **Phase:** Architecture and design. Hardware not yet finalized.
 Active work is on:
+- Flask+canvas viewer (server.py + viewer/index.html) — replaces Streamlit for main playback
 - Synthetic data generation (`make_synth_session.py`)
 - Browser-based replay viewer
 - Hardware selection
