@@ -85,7 +85,7 @@ void setup() {
 
   // Try to init — retry loop so a cold board gets a few chances
   uint8_t attempts = 0;
-  while (!imu.begin_I2C()) {
+  while (!imu.begin_I2C(0x4B)) {
     attempts++;
     Serial.printf("# BNO085 not found (attempt %u) — check wiring/PS0/PS1\n", attempts);
     if (attempts >= 5) {
