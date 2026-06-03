@@ -89,10 +89,10 @@ void setup() {
     attempts++;
     Serial.printf("# BNO085 not found (attempt %u) — check wiring/PS0/PS1\n", attempts);
     if (attempts >= 5) {
-      Serial.println("# FATAL: giving up. Halting.");
-      while (true) { delay(1000); }
+      Serial.println("# No IMU found — retrying (wire it up and reset)...");
+      attempts = 0;
     }
-    delay(500);
+    delay(1000);
   }
 
   Serial.println("# BNO085 found OK");
