@@ -60,6 +60,7 @@ latest = {
     "cal_a": 0, "cal_g": 0, "cal_m": 0,
     "ts": 0,
     "history_ax": [], "history_ay": [], "history_az": [],
+    "history_gx": [], "history_gy": [], "history_gz": [],
     "history_g":  [],
 }
 HISTORY = 100   # number of samples to keep in strip chart
@@ -87,10 +88,10 @@ def serial_reader():
             continue
 
         parts = line.split(",")
-        if len(parts) != 14:
+        if len(parts) != 15:
             continue
         try:
-            ts, qi, qj, qk, qr, ax, ay, az, gx, gy, gz, ca, cg, cm = [
+            ts, qi, qj, qk, qr, ax, ay, az, gx, gy, gz, ca, cg, cm, resets = [
                 float(x) for x in parts]
         except ValueError:
             continue
@@ -108,8 +109,12 @@ def serial_reader():
         latest["history_ax"].append(ax)
         latest["history_ay"].append(ay)
         latest["history_az"].append(az)
+        latest["history_gx"].append(gx)
+        latest["history_gy"].append(gy)
+        latest["history_gz"].append(gz)
         latest["history_g"].append(g_mag)
-        for k in ("history_ax", "history_ay", "history_az", "history_g"):
+        for k in ("history_ax", "history_ay", "history_az",
+                  "history_gx", "history_gy", "history_gz", "history_g"):
             if len(latest[k]) > HISTORY:
                 latest[k].pop(0)
 
@@ -282,8 +287,13 @@ def main():
     plt.show()
 
     while True:
+        ROT_CORRECT = np.array([
+            [ 0, -1, 0],
+            [ 1,  0, 0],
+            [ 0,  0, 1],
+        ])
         R = quat_to_matrix(latest["qi"], latest["qj"],
-                           latest["qk"], latest["qr"])
+                           latest["qk"], latest["qr"]) @ ROT_CORRECT
         draw_kart(ax3d, R)
 
         cal_bar(ax_cal,
@@ -297,9 +307,9 @@ def main():
                     "Linear Accel", "m/s²")
 
         strip_chart(ax_gyr,
-                    [latest["history_gx"] if "history_gx" in latest else [],
-                     latest["history_gy"] if "history_gy" in latest else [],
-                     latest["history_gz"] if "history_gz" in latest else []],
+                    [latest["history_gx"],
+                     latest["history_gy"],
+                     latest["history_gz"]],
                     ["X","Y","Z"],
                     ["#ff8844","#88ff44","#44ffcc"],
                     "Gyro", "rad/s")

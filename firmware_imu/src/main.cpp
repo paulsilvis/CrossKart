@@ -27,7 +27,7 @@
 
 // ── Timing ───────────────────────────────────────────────────────────────────
 #define REPORT_INTERVAL_US  100000   // 100 ms = 10 Hz
-#define WATCHDOG_MS         150      // reset if no event in 150ms (after first event)
+#define WATCHDOG_MS         2000     // 2s for bench testing (tighten when deployed)
 
 // ── Globals ───────────────────────────────────────────────────────────────────
 Adafruit_BNO08x   imu(-1);          // -1 = library does not touch RST pin
@@ -51,10 +51,11 @@ bool     firstEventSeen = false;
 
 // ── Hard reset the BNO085 via RST pin ────────────────────────────────────────
 static void hardResetBNO() {
+  pinMode(BNO085_RST, OUTPUT);
   digitalWrite(BNO085_RST, LOW);
   delay(10);
   digitalWrite(BNO085_RST, HIGH);
-  delay(100);  // wait for BNO085 to boot
+  delay(500);  // wait for BNO085 to boot
 }
 
 // ── Enable reports ────────────────────────────────────────────────────────────
@@ -77,6 +78,19 @@ static void resetIMU() {
 
   Wire.end();
   delay(50);
+
+  // Manually clock SCL 9 times to unstick any held-low SDA
+  pinMode(I2C_SCL, OUTPUT);
+  for (int i = 0; i < 9; i++) {
+    digitalWrite(I2C_SCL, LOW);  delay(5);
+    digitalWrite(I2C_SCL, HIGH); delay(5);
+  }
+  // Send a STOP condition
+  pinMode(I2C_SDA, OUTPUT);
+  digitalWrite(I2C_SDA, LOW);  delay(5);
+  digitalWrite(I2C_SCL, HIGH); delay(5);
+  digitalWrite(I2C_SDA, HIGH); delay(5);
+
   Wire.begin(I2C_SDA, I2C_SCL);
   Wire.setClock(400000);
 
